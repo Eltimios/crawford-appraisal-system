@@ -1,0 +1,12 @@
+# Zip archives
+*.zip
+
+# Frontend build output
+**/build/
+
+# Dependencies
+**/node_modules/
+
+# Environment files
+.env
+**/.env
