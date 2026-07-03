@@ -1,0 +1,330 @@
+// Crawford University non-academic staff cadres and grade levels
+// Source: Non-Academic Staff Career Promotion Structure (official university document)
+
+export const NON_TEACHING_CADRES = {
+  'Clerical Officer': [
+    'Clerical Assistant',
+    'Clerical Officer',
+    'Senior Clerical Officer',
+    'Assistant Chief Clerical Officer',
+    'Chief Clerical Officer',
+  ],
+  'Typist': [
+    'Typist Grade III',
+    'Typist Grade II',
+    'Typist Grade I',
+    'Senior Typist II',
+    'Senior Typist I',
+    'Chief Typist',
+  ],
+  'Confidential Secretary': [
+    'Confidential Secretary Grade III',
+    'Confidential Secretary Grade II',
+    'Confidential Secretary Grade I',
+    'Senior Confidential Secretary',
+    'Principal Confidential Secretary II',
+    'Principal Confidential Secretary I',
+    'Assistant Chief Confidential Secretary',
+    'Chief Confidential Secretary',
+  ],
+  'Technical Instructor': [
+    'Technical Instructor II',
+    'Technical Instructor I',
+    'Senior Technical Instructor',
+    'Principal Technical Instructor',
+    'Chief Technical Instructor',
+  ],
+  'Administrative Officer': [
+    'Administrative Officer II',
+    'Administrative Officer I',
+    'Assistant Registrar',
+    'Senior Assistant Registrar',
+    'Principal Assistant Registrar',
+    'Deputy Registrar',
+    'Registrar',
+  ],
+  'Executive Officer': [
+    'Executive Officer',
+    'Higher Executive Officer',
+    'Senior Executive Officer',
+    'Principal Executive Officer II',
+    'Principal Executive Officer I',
+    'Assistant Chief Executive Officer',
+    'Chief Executive Officer',
+  ],
+  'Porter': [
+    'Porter',
+    'Senior Porter',
+    'Chief Porter',
+    'Assistant Supervisor (Porters)',
+    'Supervisor (Porters)',
+    'Senior Supervisor (Porters)',
+  ],
+  'Security': [
+    'Patrolman',
+    'Security Assistant',
+    'Senior Security Assistant',
+    'Head Security Assistant',
+    'Chief Security Assistant',
+    'Security Officer',
+    'Higher Security Officer',
+    'Senior Security Officer',
+    'Principal Security Officer II',
+    'Principal Security Officer I',
+    'Assistant Chief Security Officer',
+    'Chief Security Officer',
+  ],
+  'Accountant': [
+    'Accountant II',
+    'Accountant I',
+    'Senior Accountant',
+    'Principal Accountant',
+    'Chief Accountant',
+    'Deputy Bursar',
+    'Bursar',
+  ],
+  'Supplies Officer': [
+    'Assistant Supplies Officer',
+    'Supplies Officer II',
+    'Supplies Officer I',
+    'Senior Supplies Officer',
+    'Principal Supplies Officer',
+    'Deputy Chief Supplies Officer',
+    'Chief Supplies Officer',
+  ],
+  'Store Officer': [
+    'Assistant Stores Officer',
+    'Stores Officer',
+    'Higher Stores Officer',
+    'Senior Stores Officer',
+    'Chief Stores Officer',
+  ],
+  'Internal Auditor': [
+    'Internal Auditor II',
+    'Internal Auditor I',
+    'Senior Internal Auditor',
+    'Principal Internal Auditor',
+    'Assistant Chief Internal Auditor',
+    'Chief Internal Auditor',
+  ],
+  'Driver / Mechanic': [
+    'Motor Driver Grade III',
+    'Motor Driver Grade II',
+    'Senior Motor Driver II',
+    'Senior Motor Driver I',
+    'Superintendent Driver',
+    'Senior Superintendent Driver II',
+    'Senior Superintendent Driver I',
+  ],
+  'Telephone Operator': [
+    'Telephone Operator in Training',
+    'Telephone Operator',
+    'Senior Telephone Operator',
+    'Telephone Supervisor',
+    'Telephone Exchange Superintendent',
+    'Senior Telephone Exchange Superintendent',
+  ],
+  'Craftsman': [
+    'Assistant Craftsman',
+    'Craftsman',
+    'Senior Craftsman',
+    'Foreman',
+    'Workshop Supervisor',
+    'Senior Workshop Supervisor II',
+    'Senior Workshop Supervisor I',
+  ],
+  'Technical Assistant': [
+    'Labourer',
+    'Attendant',
+    'Technical Assistant',
+    'Senior Technical Assistant II',
+    'Senior Technical Assistant I',
+    'Chief Technical Assistant',
+  ],
+  'Technical Officer': [
+    'Assistant Technical Officer',
+    'Technical Officer',
+    'Higher Technical Officer',
+    'Senior Technical Officer',
+    'Principal Technical Officer II',
+    'Principal Technical Officer I',
+    'Assistant Chief Technical Officer',
+    'Chief Technical Officer',
+  ],
+  'Technologist': [
+    'Assistant Technologist',
+    'Senior Assistant Technologist',
+    'Technologist II',
+    'Technologist I',
+    'Senior Technologist',
+    'Principal Technologist',
+    'Assistant Chief Technologist',
+    'Chief Technologist',
+  ],
+  'Laboratory Staff': [
+    'Laboratory Attendant',
+    'Head Laboratory Attendant',
+    'Laboratory Assistant',
+    'Senior Laboratory Assistant',
+    'Laboratory Supervisor',
+    'Senior Laboratory Supervisor',
+    'Laboratory Superintendent',
+    'Senior Laboratory Superintendent',
+  ],
+  'Quantity Surveyor': [
+    'Quantity Surveyor Grade II',
+    'Quantity Surveyor Grade I',
+    'Senior Quantity Surveyor',
+    'Principal Quantity Surveyor',
+    'Assistant Chief Quantity Surveyor',
+    'Deputy Chief Quantity Surveyor',
+    'Chief Quantity Surveyor',
+  ],
+  'Architect': [
+    'Architect Grade II',
+    'Architect Grade I',
+    'Senior Architect',
+    'Principal Architect',
+    'Assistant Chief Architect',
+    'Chief Architect',
+    'Assistant Director of Works',
+    'Director of Works',
+  ],
+  'Engineer': [
+    'Pupil Engineer',
+    'Engineer Grade II',
+    'Engineer Grade I',
+    'Senior Engineer',
+    'Assistant Chief Engineer',
+    'Chief Engineer',
+    'Director of Works',
+  ],
+  'Horticulturist': [
+    'Horticulturist II',
+    'Horticulturist I',
+    'Senior Horticulturist',
+    'Principal Horticulturist',
+    'Assistant Chief Horticulturist',
+    'Chief Horticulturist',
+  ],
+  'Health Technologist': [
+    'Health Technologist',
+    'Higher Health Technologist',
+    'Senior Health Technologist',
+    'Principal Health Technologist',
+    'Assistant Chief Health Technologist',
+    'Chief Health Technologist',
+  ],
+  'Library Officer': [
+    'Assistant Library Officer',
+    'Library Officer',
+    'Higher Library Officer',
+    'Senior Library Officer',
+    'Principal Library Officer II',
+    'Principal Library Officer I',
+    'Assistant Chief Library Officer',
+    'Chief Library Officer',
+  ],
+  'Bindery Staff': [
+    'Bindery Attendant',
+    'Bindery Assistant II',
+    'Bindery Assistant I',
+    'Binder',
+    'Senior Binder',
+    'Foreman Binder',
+    'Superintendent of Bindery',
+    'Higher Superintendent of Bindery',
+    'Senior Superintendent of Bindery',
+  ],
+  'Printing Staff': [
+    'Senior Printer',
+    'Foreman Printer',
+    'Assistant Superintendent of Press',
+    'Superintendent of Press',
+    'Higher Superintendent of Press',
+    'Senior Superintendent of Press',
+  ],
+  'Agricultural / Animal Health / Forest': [
+    'Animal Health / Agricultural / Forest Assistant',
+    'Animal Health / Agricultural / Forest Superintendent',
+    'Higher Animal Health / Agricultural / Forest Superintendent',
+    'Senior Animal Health / Agricultural / Forest Superintendent',
+    'Principal Animal Health / Agricultural / Forest Superintendent',
+    'Asst. Chief Animal Health / Agricultural / Forest Superintendent',
+    'Chief Animal Health / Agricultural / Forest Superintendent',
+  ],
+  'Farm Management': [
+    'Farm Officer II',
+    'Farm Officer I',
+    'Senior Farm Officer',
+    'Farm Manager',
+    'Senior Farm Manager',
+    'Principal Farm Manager',
+  ],
+  'Extra-Mural Organizer': [
+    'Extra Mural Course Organiser',
+    'Higher Extra Mural Course Organiser',
+    'Senior Extra Mural Course Organiser',
+    'Principal Extra Mural Course Organiser',
+  ],
+  'Catering / Housekeeping': [
+    'Catering / Housekeeping Supervisor',
+    'Higher Catering / Housekeeping Officer',
+    'Senior Catering / Housekeeping Officer',
+    'Principal Catering / Housekeeping Officer',
+    'Assistant Chief Catering / Housekeeping Officer',
+    'Chief Catering / Housekeeping Officer',
+  ],
+  'Physical Planning Officer': [
+    'Assistant Planning Officer',
+    'Planning Officer Grade II',
+    'Planning Officer Grade I',
+    'Senior Planning Officer',
+    'Principal Planning Officer',
+    'Assistant Chief Planning Officer',
+    'Chief Planning Officer',
+  ],
+  'Nursing Officer': [
+    'Nursing Officer',
+    'Higher Nursing Officer',
+    'Senior Nursing Officer',
+    'Principal Nursing Officer',
+    'Assistant Chief Nursing Officer',
+    'Chief Nursing Officer',
+  ],
+  'System Analyst / Computer Programmer': [
+    'Computer Programmer II',
+    'Computer Programmer I',
+    'System Analyst II',
+    'System Analyst I',
+    'Senior System Analyst',
+    'Principal System Analyst',
+    'Chief System Analyst',
+  ],
+};
+
+export const CADRE_NAMES = Object.keys(NON_TEACHING_CADRES);
+
+// Parse "Cadre — Grade" string back into { cadre, grade }
+// Also handles legacy plain grade strings by searching all cadres
+export function parseCadreGrade(value) {
+  if (!value) return { cadre: '', grade: '' };
+  const sep = ' — '; // em dash with spaces
+  if (value.includes(sep)) {
+    const idx = value.indexOf(sep);
+    const cadre = value.slice(0, idx).trim();
+    const grade = value.slice(idx + sep.length).trim();
+    if (NON_TEACHING_CADRES[cadre]) return { cadre, grade };
+  }
+  // Fallback: search all cadres for a matching grade string
+  for (const [cadre, grades] of Object.entries(NON_TEACHING_CADRES)) {
+    if (grades.includes(value)) return { cadre, grade: value };
+  }
+  return { cadre: '', grade: value };
+}
+
+// Combine cadre + grade into a single "Cadre — Grade" string
+export function combineCadreGrade(cadre, grade) {
+  if (cadre && grade) return `${cadre} — ${grade}`;
+  return cadre || grade || '';
+}
