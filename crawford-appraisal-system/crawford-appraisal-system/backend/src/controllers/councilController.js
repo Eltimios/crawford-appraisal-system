@@ -1,4 +1,5 @@
-const { supabase } = require('../config/supabase');
+const { v4: uuidv4 } = require('uuid');
+const { db } = require('../config/db');
 
 const VALID_DECISIONS = ['approved', 'rejected', 'deferred'];
 
@@ -14,31 +15,40 @@ const STAFF_MESSAGES = {
   deferred: 'The University Council has deferred the review of your appraisal to the next appraisal cycle.',
 };
 
+const withStaffUser = (query) =>
+  query
+    .select(
+      'appraisals.*',
+      'u.full_name as u_full_name', 'u.staff_id as u_staff_id', 'u.department as u_department',
+      'u.college as u_college', 'u.current_rank as u_current_rank', 'u.staff_category as u_staff_category',
+      'u.date_of_last_promotion as u_date_of_last_promotion', 'u.date_of_first_appointment as u_date_of_first_appointment'
+    )
+    .leftJoin('users as u', 'appraisals.staff_id', 'u.id');
+
+const reshapeUser = ({ u_full_name, u_staff_id, u_department, u_college, u_current_rank, u_staff_category, u_date_of_last_promotion, u_date_of_first_appointment, ...appraisal }) => ({
+  ...appraisal,
+  users: {
+    full_name: u_full_name, staff_id: u_staff_id, department: u_department, college: u_college,
+    current_rank: u_current_rank, staff_category: u_staff_category,
+    date_of_last_promotion: u_date_of_last_promotion, date_of_first_appointment: u_date_of_first_appointment,
+  },
+});
+
 // GET /api/council/pending
 const getPendingDecisions = async (req, res) => {
   try {
     const { appraisal_year, q } = req.query;
 
-    let query = supabase
-      .from('appraisals')
-      .select(`
-        *,
-        users!appraisals_staff_id_fkey(
-          full_name, staff_id, department, college,
-          current_rank, staff_category,
-          date_of_last_promotion, date_of_first_appointment
-        )
-      `)
-      .eq('status', 'apc_recommended')
-      .not('apc_decision', 'is', null)
-      .is('council_decision', null);
+    let query = withStaffUser(db('appraisals'))
+      .where('appraisals.status', 'apc_recommended')
+      .whereNotNull('appraisals.apc_decision')
+      .whereNull('appraisals.council_decision');
 
-    if (appraisal_year) query = query.eq('appraisal_year', appraisal_year);
+    if (appraisal_year) query = query.andWhere('appraisals.appraisal_year', appraisal_year);
 
-    const { data, error } = await query.order('created_at', { ascending: true });
-    if (error) throw error;
+    const rows = await query.orderBy('appraisals.created_at', 'asc');
+    let results = rows.map(reshapeUser);
 
-    let results = data || [];
     if (q) {
       const lower = q.toLowerCase();
       results = results.filter(d =>
@@ -59,23 +69,13 @@ const getCouncilDecisions = async (req, res) => {
   try {
     const { appraisal_year, decision } = req.query;
 
-    let query = supabase
-      .from('appraisals')
-      .select(`
-        *,
-        users!appraisals_staff_id_fkey(
-          full_name, staff_id, department, college,
-          current_rank, staff_category
-        )
-      `)
-      .not('council_decision', 'is', null);
+    let query = withStaffUser(db('appraisals')).whereNotNull('appraisals.council_decision');
 
-    if (appraisal_year) query = query.eq('appraisal_year', appraisal_year);
+    if (appraisal_year) query = query.andWhere('appraisals.appraisal_year', appraisal_year);
 
-    const { data, error } = await query.order('created_at', { ascending: false });
-    if (error) throw error;
+    const rows = await query.orderBy('appraisals.created_at', 'desc');
+    let results = rows.map(reshapeUser);
 
-    let results = data || [];
     if (decision) {
       results = results.filter(d => d.council_decision?.decision === decision);
     }
@@ -90,19 +90,16 @@ const getCouncilDecisions = async (req, res) => {
 // GET /api/council/stats
 const getCouncilStats = async (req, res) => {
   try {
-    const [pendingRes, decidedRes] = await Promise.all([
-      supabase.from('appraisals')
-        .select('id, staff_category')
-        .eq('status', 'apc_recommended')
-        .not('apc_decision', 'is', null)
-        .is('council_decision', null),
-      supabase.from('appraisals')
-        .select('id, staff_category, council_decision')
-        .not('council_decision', 'is', null),
+    const [pending, decided] = await Promise.all([
+      db('appraisals')
+        .select('id', 'staff_category')
+        .where('status', 'apc_recommended')
+        .whereNotNull('apc_decision')
+        .whereNull('council_decision'),
+      db('appraisals')
+        .select('id', 'staff_category', 'council_decision')
+        .whereNotNull('council_decision'),
     ]);
-
-    const pending = pendingRes.data || [];
-    const decided = decidedRes.data || [];
 
     const pending_academic = pending.filter(d => d.staff_category === 'academic').length;
     const pending_nonteaching = pending.length - pending_academic;
@@ -145,9 +142,9 @@ const recordCouncilDecision = async (req, res) => {
       return res.status(400).json({ error: `Decision must be one of: ${VALID_DECISIONS.join(', ')}` });
     }
 
-    const { data: appraisal } = await supabase.from('appraisals')
-      .select('id, staff_id, status, apc_decision')
-      .eq('id', id).single();
+    const appraisal = await db('appraisals')
+      .select('id', 'staff_id', 'status', 'apc_decision')
+      .where({ id }).first();
 
     if (!appraisal) return res.status(404).json({ error: 'Appraisal not found.' });
     if (!appraisal.apc_decision) return res.status(400).json({ error: 'This appraisal has no APC recommendation yet.' });
@@ -163,13 +160,13 @@ const recordCouncilDecision = async (req, res) => {
       decided_at: new Date().toISOString(),
     };
 
-    const { data, error } = await supabase.from('appraisals').update({
+    const [data] = await db('appraisals').where({ id }).update({
       council_decision: councilDecision,
       status: 'council_decided',
-    }).eq('id', id).select().single();
-    if (error) throw error;
+    }).returning('*');
 
-    await supabase.from('notifications').insert({
+    await db('notifications').insert({
+      id: uuidv4(),
       user_id: appraisal.staff_id,
       type: 'council_decision',
       title: DECISION_LABELS[decision],
@@ -177,7 +174,8 @@ const recordCouncilDecision = async (req, res) => {
       related_appraisal_id: id,
     });
 
-    await supabase.from('audit_logs').insert({
+    await db('audit_logs').insert({
+      id: uuidv4(),
       user_id: req.user.id,
       action: `COUNCIL_DECISION_${decision.toUpperCase()}`,
       entity_type: 'appraisals',

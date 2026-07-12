@@ -1,24 +1,19 @@
 require('dotenv').config();
 
-// Prevent SSL/TLS fetch errors from Supabase client background connections
-// crashing the process on Node.js 24 (unhandled rejection → crash)
 process.on('unhandledRejection', (reason) => {
-  const msg = reason?.message || String(reason);
-  if (msg.includes('fetch failed') || msg.includes('SSL') || msg.includes('TLS')) {
-    console.warn('[warn] Supabase background fetch error (ignored):', msg);
-  } else {
-    console.error('[error] Unhandled rejection:', reason);
-  }
+  console.error('[error] Unhandled rejection:', reason);
 });
 process.on('uncaughtException', (err) => {
   console.error('[error] Uncaught exception:', err);
 });
 
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const { UPLOADS_ROOT } = require('./config/storage');
 
 const authRoutes = require('./routes/authRoutes');
 const appraisalRoutes = require('./routes/appraisalRoutes');
@@ -30,8 +25,10 @@ const adminRoutes = require('./routes/adminRoutes');
 const settingsRoutes = require('./routes/settingsRoutes');
 const registryRoutes = require('./routes/registryRoutes');
 const hrRoutes = require('./routes/hrRoutes');
-const councilRoutes = require('./routes/councilRoutes');
+// Council portal is temporarily hidden — progress now terminates at A&PC.
+// const councilRoutes = require('./routes/councilRoutes');
 const minutesRoutes = require('./routes/minutesRoutes');
+const minutesDownloadRoutes = require('./routes/minutesDownloadRoutes');
 const assessorRoutes = require('./routes/assessorRoutes');
 const publicRoutes = require('./routes/publicRoutes');
 
@@ -48,6 +45,11 @@ app.use(cors({
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Publicly-servable uploaded files (e.g. staff publications) — needed unauthenticated
+// by the external assessor portal. Meeting minutes are NOT served here; they go
+// through an authenticated streaming route instead (see minutesRoutes.js).
+app.use('/uploads/publications', express.static(path.join(UPLOADS_ROOT, 'publications')));
 
 // Disable browser caching for all API responses
 app.use('/api/', (_req, res, next) => {
@@ -74,8 +76,9 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/registry', registryRoutes);
 app.use('/api/hr', hrRoutes);
-app.use('/api/council', councilRoutes);
+// app.use('/api/council', councilRoutes);
 app.use('/api/minutes', minutesRoutes);
+app.use('/api/minutes-download', minutesDownloadRoutes);
 app.use('/api/assessors', assessorRoutes);
 app.use('/api/public', publicRoutes);
 

@@ -13,6 +13,7 @@ import {
 const hodNavItems = [
   { label: 'Dashboard',          icon: LuLayoutDashboard, to: '/hod' },
   { label: 'My Appraisal',       icon: LuClipboardList,   to: '/hod/appraisal' },
+  { label: 'My Publications',    icon: LuBookOpen,        to: '/hod/my-publications' },
   { label: 'Assess Staff',       icon: LuPencilLine,      to: '/hod/assess' },
   { label: 'Staff Publications', icon: LuBookOpen,        to: '/hod/publications' },
   { label: 'My Assessment',      icon: LuBarChart2,       to: '/hod/assessment' },
@@ -51,6 +52,7 @@ const navConfig = {
   dean: [
     { label: 'Dashboard',          icon: LuLayoutDashboard, to: '/dean' },
     { label: 'My Appraisal',       icon: LuClipboardList,   to: '/dean/appraisal' },
+    { label: 'My Publications',    icon: LuBookOpen,        to: '/dean/my-publications' },
     { label: 'My Assessment',      icon: LuBarChart2,       to: '/dean/assessment' },
     { label: 'My Biodata',         icon: LuBadge,           children: [
       { label: 'View Profile',     icon: LuUser,     to: '/dean/biodata' },

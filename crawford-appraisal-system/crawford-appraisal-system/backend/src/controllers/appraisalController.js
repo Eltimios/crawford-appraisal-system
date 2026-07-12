@@ -1,24 +1,24 @@
-const { supabase } = require('../config/supabase'); // v2
+const { v4: uuidv4 } = require('uuid');
+const { db } = require('../config/db');
 
 const logAudit = async (userId, action, entityType, entityId) => {
   try {
-    await supabase.from('audit_logs').insert({ user_id: userId, action, entity_type: entityType, entity_id: entityId });
+    await db('audit_logs').insert({ id: uuidv4(), user_id: userId, action, entity_type: entityType, entity_id: entityId });
   } catch (err) { console.error('Audit log error:', err); }
 };
 
 const notifyUser = async (userId, type, title, message, appraisalId) => {
   try {
-    await supabase.from('notifications').insert({ user_id: userId, type, title, message, related_appraisal_id: appraisalId });
+    await db('notifications').insert({ id: uuidv4(), user_id: userId, type, title, message, related_appraisal_id: appraisalId });
   } catch (err) { console.error('Notify error:', err); }
 };
 
 const getMyAppraisals = async (req, res) => {
   try {
     const { year } = req.query;
-    let q = supabase.from('appraisals').select('*').eq('staff_id', req.user.id);
-    if (year) q = q.eq('appraisal_year', year);
-    const { data, error } = await q.order('created_at', { ascending: false });
-    if (error) throw error;
+    let q = db('appraisals').select('*').where({ staff_id: req.user.id });
+    if (year) q = q.andWhere({ appraisal_year: year });
+    const data = await q.orderBy('created_at', 'desc');
     res.json({ appraisals: data });
   } catch (err) {
     console.error('Get appraisals error:', err);
@@ -29,12 +29,22 @@ const getMyAppraisals = async (req, res) => {
 const getAppraisalById = async (req, res) => {
   try {
     const { id } = req.params;
-    const { data, error } = await supabase
-      .from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_id, department, current_rank, staff_category, college)')
-      .eq('id', id)
-      .single();
-    if (error || !data) return res.status(404).json({ error: 'Appraisal not found.' });
+    const row = await db('appraisals')
+      .select(
+        'appraisals.*',
+        'u.full_name as u_full_name', 'u.staff_id as u_staff_id', 'u.department as u_department',
+        'u.current_rank as u_current_rank', 'u.staff_category as u_staff_category', 'u.college as u_college'
+      )
+      .leftJoin('users as u', 'appraisals.staff_id', 'u.id')
+      .where('appraisals.id', id)
+      .first();
+    if (!row) return res.status(404).json({ error: 'Appraisal not found.' });
+
+    const { u_full_name, u_staff_id, u_department, u_current_rank, u_staff_category, u_college, ...appraisal } = row;
+    const data = {
+      ...appraisal,
+      users: { full_name: u_full_name, staff_id: u_staff_id, department: u_department, current_rank: u_current_rank, staff_category: u_staff_category, college: u_college },
+    };
 
     const privileged = ['hod', 'hou', 'dean', 'college_board', 'a&pc', 'admin'];
     if (data.staff_id !== req.user.id && !privileged.includes(req.user.role)) {
@@ -58,11 +68,8 @@ const createAppraisal = async (req, res) => {
   try {
     const { appraisal_year, staff_category: body_category, part1_data } = req.body;
 
-    // maybeSingle() returns null (no error) when 0 rows found, avoids PGRST116
-    const { data: existing, error: existingError } = await supabase
-      .from('appraisals').select('id, status')
-      .eq('staff_id', req.user.id).eq('appraisal_year', appraisal_year).maybeSingle();
-    if (existingError) throw existingError;
+    const existing = await db('appraisals').select('id', 'status')
+      .where({ staff_id: req.user.id, appraisal_year }).first();
     if (existing) {
       return res.status(400).json({
         error: `You already have an appraisal for ${appraisal_year}.`,
@@ -74,25 +81,28 @@ const createAppraisal = async (req, res) => {
     const staff_category = req.user.staff_category || body_category;
     if (!staff_category) return res.status(400).json({ error: 'Staff category is not set. Contact your administrator.' });
 
-    const { data, error } = await supabase.from('appraisals').insert({
-      staff_id: req.user.id,
-      appraisal_year,
-      staff_category,
-      status: 'draft',
-      part1_data: part1_data || null,
-    }).select().single();
-    if (error) {
+    let data;
+    try {
+      [data] = await db('appraisals').insert({
+        id: uuidv4(),
+        staff_id: req.user.id,
+        appraisal_year,
+        staff_category,
+        status: 'draft',
+        part1_data: part1_data || null,
+      }).returning('*');
+    } catch (err) {
       // Unique constraint violation — another request beat us to it
-      if (error.code === '23505') {
-        const { data: race } = await supabase.from('appraisals').select('id, status')
-          .eq('staff_id', req.user.id).eq('appraisal_year', appraisal_year).maybeSingle();
+      if (err.code === '23505') {
+        const race = await db('appraisals').select('id', 'status')
+          .where({ staff_id: req.user.id, appraisal_year }).first();
         return res.status(400).json({
           error: `You already have an appraisal for ${appraisal_year}.`,
           existingId: race?.id,
           existingStatus: race?.status,
         });
       }
-      throw error;
+      throw err;
     }
 
     await logAudit(req.user.id, 'APPRAISAL_CREATED', 'appraisals', data.id);
@@ -108,12 +118,11 @@ const updatePart1 = async (req, res) => {
     const { id } = req.params;
     const { part1_data } = req.body;
 
-    const { data: appraisal } = await supabase.from('appraisals').select('*').eq('id', id).eq('staff_id', req.user.id).single();
+    const appraisal = await db('appraisals').select('*').where({ id, staff_id: req.user.id }).first();
     if (!appraisal) return res.status(404).json({ error: 'Appraisal not found.' });
     if (appraisal.part1_locked) return res.status(400).json({ error: 'Part 1 has been submitted and is now locked.' });
 
-    const { data, error } = await supabase.from('appraisals').update({ part1_data }).eq('id', id).select().single();
-    if (error) throw error;
+    const [data] = await db('appraisals').where({ id }).update({ part1_data }).returning('*');
     res.json({ message: 'Part 1 saved successfully.', appraisal: data });
   } catch (err) {
     console.error('Update Part 1 error:', err);
@@ -124,21 +133,22 @@ const updatePart1 = async (req, res) => {
 const submitAppraisal = async (req, res) => {
   try {
     const { id } = req.params;
-    const { data: appraisal } = await supabase.from('appraisals').select('*').eq('id', id).eq('staff_id', req.user.id).single();
+    const appraisal = await db('appraisals').select('*').where({ id, staff_id: req.user.id }).first();
     if (!appraisal) return res.status(404).json({ error: 'Appraisal not found.' });
     if (appraisal.status !== 'draft') return res.status(400).json({ error: 'Only draft appraisals can be submitted.' });
 
-    const { data, error } = await supabase.from('appraisals').update({
+    const [data] = await db('appraisals').where({ id }).update({
       status: 'submitted',
       part1_locked: true,
       part1_submitted_at: new Date().toISOString(),
-    }).eq('id', id).select().single();
-    if (error) throw error;
+    }).returning('*');
 
     // Notify HOD (but not if the submitter IS the HOD — their form goes to the Dean)
-    const { data: hod } = await supabase.from('users').select('id')
-      .eq('department', req.user.department).in('role', ['hod', 'hou'])
-      .neq('id', req.user.id).maybeSingle();
+    const hod = await db('users').select('id')
+      .where({ department: req.user.department })
+      .whereIn('role', ['hod', 'hou'])
+      .whereNot({ id: req.user.id })
+      .first();
     if (hod) {
       await notifyUser(hod.id, 'appraisal_submitted', 'New Appraisal Submitted',
         `${req.user.full_name} has submitted their appraisal and is awaiting your assessment.`, id);
@@ -164,7 +174,7 @@ const respondToAssessment = async (req, res) => {
       return res.status(400).json({ error: 'A counter-comment is required when disputing.' });
     }
 
-    const { data: appraisal } = await supabase.from('appraisals').select('*').eq('id', id).eq('staff_id', req.user.id).single();
+    const appraisal = await db('appraisals').select('*').where({ id, staff_id: req.user.id }).first();
     if (!appraisal) return res.status(404).json({ error: 'Appraisal not found.' });
 
     const respondableStatuses = [
@@ -178,17 +188,15 @@ const respondToAssessment = async (req, res) => {
     if (!canView) return res.status(403).json({ error: 'You cannot respond to the assessment yet.' });
 
     const newStatus = action === 'disputed' ? 'dispute_raised' : 'staff_viewed';
-    const { data, error } = await supabase.from('appraisals').update({
+    const [data] = await db('appraisals').where({ id }).update({
       staff_action: action,
       staff_counter_comment: counter_comment || null,
       staff_action_at: new Date().toISOString(),
       status: newStatus,
-    }).eq('id', id).select().single();
-    if (error) throw error;
+    }).returning('*');
 
     if (action === 'disputed') {
-      const { data: dean } = await supabase.from('users').select('id')
-        .eq('college', req.user.college).eq('role', 'dean').single();
+      const dean = await db('users').select('id').where({ college: req.user.college, role: 'dean' }).first();
       if (dean) {
         await notifyUser(dean.id, 'dispute_submitted', 'Appraisal Dispute Submitted',
           `${req.user.full_name} has disputed their appraisal assessment.`, id);
@@ -215,34 +223,39 @@ const getDepartmentAppraisals = async (req, res) => {
 
     if (role === 'reporting_officer') {
       // Reporting Officer: fetch only staff directly assigned to them
-      const { data: assignedStaff, error: assignErr } = await supabase
-        .from('users')
+      const assignedStaff = await db('users')
         .select('id')
-        .eq('reporting_officer_id', req.user.id)
-        .in('staff_category', ['junior_nonteaching', 'senior_nonteaching']);
-      if (assignErr) throw assignErr;
-      staffIds = (assignedStaff || []).map(u => u.id);
+        .where({ reporting_officer_id: req.user.id })
+        .whereIn('staff_category', ['junior_nonteaching', 'senior_nonteaching']);
+      staffIds = assignedStaff.map(u => u.id);
     } else {
       // HOD/HOU: fetch academic staff in same department
-      const { data: deptStaff, error: staffErr } = await supabase
-        .from('users')
+      const deptStaff = await db('users')
         .select('id')
-        .eq('department', req.user.department)
-        .eq('staff_category', 'academic')
-        .neq('id', req.user.id);
-      if (staffErr) throw staffErr;
-      staffIds = (deptStaff || []).map(u => u.id);
+        .where({ department: req.user.department, staff_category: 'academic' })
+        .whereNot({ id: req.user.id });
+      staffIds = deptStaff.map(u => u.id);
     }
 
     if (staffIds.length === 0) return res.json({ appraisals: [] });
 
-    let q = supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_id, current_rank, staff_category, department)')
-      .in('staff_id', staffIds)
-      .neq('status', 'draft');
-    if (appraisal_year) q = q.eq('appraisal_year', appraisal_year);
-    const { data, error } = await q.order('created_at', { ascending: false });
-    if (error) throw error;
+    let q = db('appraisals')
+      .select(
+        'appraisals.*',
+        'u.full_name as u_full_name', 'u.staff_id as u_staff_id', 'u.current_rank as u_current_rank',
+        'u.staff_category as u_staff_category', 'u.department as u_department'
+      )
+      .leftJoin('users as u', 'appraisals.staff_id', 'u.id')
+      .whereIn('appraisals.staff_id', staffIds)
+      .whereNot('appraisals.status', 'draft');
+    if (appraisal_year) q = q.andWhere('appraisals.appraisal_year', appraisal_year);
+    const rows = await q.orderBy('appraisals.created_at', 'desc');
+
+    const data = rows.map(({ u_full_name, u_staff_id, u_current_rank, u_staff_category, u_department, ...appraisal }) => ({
+      ...appraisal,
+      users: { full_name: u_full_name, staff_id: u_staff_id, current_rank: u_current_rank, staff_category: u_staff_category, department: u_department },
+    }));
+
     res.json({ appraisals: data });
   } catch (err) {
     console.error('Get department appraisals error:', err);
@@ -255,23 +268,31 @@ const getHODSubmissions = async (req, res) => {
     const { appraisal_year } = req.query;
 
     // Dean sees HOD/HOU appraisals from their own college (excluding self)
-    const { data: hods, error: hodErr } = await supabase
-      .from('users').select('id')
-      .eq('college', req.user.college)
-      .in('role', ['hod', 'hou'])
-      .neq('id', req.user.id);
-    if (hodErr) throw hodErr;
+    const hods = await db('users').select('id')
+      .where({ college: req.user.college })
+      .whereIn('role', ['hod', 'hou'])
+      .whereNot({ id: req.user.id });
 
-    const hodIds = (hods || []).map(u => u.id);
+    const hodIds = hods.map(u => u.id);
     if (hodIds.length === 0) return res.json({ appraisals: [] });
 
-    let q = supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_id, current_rank, department, staff_category)')
-      .in('staff_id', hodIds)
-      .neq('status', 'draft');
-    if (appraisal_year) q = q.eq('appraisal_year', appraisal_year);
-    const { data, error } = await q.order('created_at', { ascending: false });
-    if (error) throw error;
+    let q = db('appraisals')
+      .select(
+        'appraisals.*',
+        'u.full_name as u_full_name', 'u.staff_id as u_staff_id', 'u.current_rank as u_current_rank',
+        'u.department as u_department', 'u.staff_category as u_staff_category'
+      )
+      .leftJoin('users as u', 'appraisals.staff_id', 'u.id')
+      .whereIn('appraisals.staff_id', hodIds)
+      .whereNot('appraisals.status', 'draft');
+    if (appraisal_year) q = q.andWhere('appraisals.appraisal_year', appraisal_year);
+    const rows = await q.orderBy('appraisals.created_at', 'desc');
+
+    const data = rows.map(({ u_full_name, u_staff_id, u_current_rank, u_department, u_staff_category, ...appraisal }) => ({
+      ...appraisal,
+      users: { full_name: u_full_name, staff_id: u_staff_id, current_rank: u_current_rank, department: u_department, staff_category: u_staff_category },
+    }));
+
     res.json({ appraisals: data });
   } catch (err) {
     console.error('Get HOD submissions error:', err);
@@ -284,22 +305,30 @@ const getDeanSubmissions = async (req, res) => {
   try {
     const { appraisal_year } = req.query;
 
-    const { data: deans, error: deanErr } = await supabase
-      .from('users').select('id')
-      .in('role', ['dean'])
-      .neq('id', req.user.id);
-    if (deanErr) throw deanErr;
+    const deans = await db('users').select('id')
+      .where({ role: 'dean' })
+      .whereNot({ id: req.user.id });
 
-    const deanIds = (deans || []).map(u => u.id);
+    const deanIds = deans.map(u => u.id);
     if (deanIds.length === 0) return res.json({ appraisals: [] });
 
-    let q = supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_id, current_rank, department, college, staff_category)')
-      .in('staff_id', deanIds)
-      .neq('status', 'draft');
-    if (appraisal_year) q = q.eq('appraisal_year', appraisal_year);
-    const { data, error } = await q.order('created_at', { ascending: false });
-    if (error) throw error;
+    let q = db('appraisals')
+      .select(
+        'appraisals.*',
+        'u.full_name as u_full_name', 'u.staff_id as u_staff_id', 'u.current_rank as u_current_rank',
+        'u.department as u_department', 'u.college as u_college', 'u.staff_category as u_staff_category'
+      )
+      .leftJoin('users as u', 'appraisals.staff_id', 'u.id')
+      .whereIn('appraisals.staff_id', deanIds)
+      .whereNot('appraisals.status', 'draft');
+    if (appraisal_year) q = q.andWhere('appraisals.appraisal_year', appraisal_year);
+    const rows = await q.orderBy('appraisals.created_at', 'desc');
+
+    const data = rows.map(({ u_full_name, u_staff_id, u_current_rank, u_department, u_college, u_staff_category, ...appraisal }) => ({
+      ...appraisal,
+      users: { full_name: u_full_name, staff_id: u_staff_id, current_rank: u_current_rank, department: u_department, college: u_college, staff_category: u_staff_category },
+    }));
+
     res.json({ appraisals: data });
   } catch (err) {
     console.error('Get Dean submissions error:', err);
@@ -318,17 +347,14 @@ const updateBiodata = async (req, res) => {
     const patch = {};
     BIODATA_FIELDS.forEach(f => { if (req.body[f] !== undefined) patch[f] = req.body[f]; });
 
-    const { data: appraisal, error: findErr } = await supabase
-      .from('appraisals').select('id, part1_data')
-      .eq('staff_id', req.user.id)
-      .order('created_at', { ascending: false })
-      .limit(1).maybeSingle();
-    if (findErr) throw findErr;
+    const appraisal = await db('appraisals').select('id', 'part1_data')
+      .where({ staff_id: req.user.id })
+      .orderBy('created_at', 'desc')
+      .first();
     if (!appraisal) return res.status(404).json({ error: 'No appraisal found. Please start your appraisal form first.' });
 
     const merged = { ...(appraisal.part1_data || {}), ...patch };
-    const { error } = await supabase.from('appraisals').update({ part1_data: merged }).eq('id', appraisal.id);
-    if (error) throw error;
+    await db('appraisals').where({ id: appraisal.id }).update({ part1_data: merged });
 
     res.json({ message: 'Biodata updated successfully.' });
   } catch (err) {

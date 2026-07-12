@@ -85,8 +85,8 @@ const AdminHome = () => {
           {[
             { label: 'Frontend',      status: 'Online',    color: '#10b981' },
             { label: 'Backend API',   status: 'Online',    color: '#10b981' },
-            { label: 'Supabase Auth', status: 'Connected', color: '#10b981' },
-            { label: 'Supabase DB',   status: 'Connected', color: '#10b981' },
+            { label: 'Authentication', status: 'Connected', color: '#10b981' },
+            { label: 'PostgreSQL DB',  status: 'Connected', color: '#10b981' },
           ].map((item, i) => (
             <div key={i} style={{
               background: 'var(--bg-hover)', borderRadius: 'var(--radius-sm)',

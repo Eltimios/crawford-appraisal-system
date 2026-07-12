@@ -1,12 +1,15 @@
-const { supabase } = require('../config/supabase');
+const bcrypt = require('bcryptjs');
+const { v4: uuidv4 } = require('uuid');
+const { db } = require('../config/db');
+const { stripPasswordHash, stripPasswordHashMany } = require('../utils/sanitizeUser');
 
 // ─── Stats ───────────────────────────────────────────────────────────────────
 
 const getAdminStats = async (req, res) => {
   try {
-    const [{ data: users }, { data: appraisals }] = await Promise.all([
-      supabase.from('users').select('id, department, is_active'),
-      supabase.from('appraisals').select('id, status'),
+    const [users, appraisals] = await Promise.all([
+      db('users').select('id', 'department', 'is_active'),
+      db('appraisals').select('id', 'status'),
     ]);
 
     const totalUsers = users?.length || 0;
@@ -29,9 +32,8 @@ const getAdminStats = async (req, res) => {
 
 const getAllUsers = async (req, res) => {
   try {
-    const { data, error } = await supabase.from('users').select('*').order('full_name');
-    if (error) throw error;
-    res.json({ users: data });
+    const data = await db('users').select('*').orderBy('full_name');
+    res.json({ users: stripPasswordHashMany(data) });
   } catch (err) {
     console.error('Get all users error:', err);
     res.status(500).json({ error: 'Failed to fetch users.' });
@@ -48,36 +50,25 @@ const createUser = async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     }
 
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-      email, password, email_confirm: true,
-    });
-    if (authError) {
-      if (authError.message?.includes('already registered') || authError.message?.includes('already exists')) {
-        return res.status(409).json({ error: 'A user with this email already exists.' });
-      }
-      throw authError;
-    }
+    const existing = await db('users').where({ email }).first();
+    if (existing) return res.status(409).json({ error: 'A user with this email already exists.' });
 
-    const { data: profile, error: profileError } = await supabase.from('users').insert({
-      id: authData.user.id, email, full_name, role,
+    const password_hash = await bcrypt.hash(password, 10);
+    const [profile] = await db('users').insert({
+      id: uuidv4(), email, full_name, role, password_hash,
       staff_id: staff_id || null,
       department: department || null,
       college: college || null,
       current_rank: current_rank || null,
       staff_category: staff_category || null,
       is_active: true,
-    }).select().single();
+    }).returning('*');
 
-    if (profileError) {
-      await supabase.auth.admin.deleteUser(authData.user.id);
-      throw profileError;
-    }
-
-    await supabase.from('audit_logs').insert({
-      user_id: req.user.id, action: 'ADMIN_USER_CREATED', entity_type: 'users', entity_id: profile.id,
+    await db('audit_logs').insert({
+      id: uuidv4(), user_id: req.user.id, action: 'ADMIN_USER_CREATED', entity_type: 'users', entity_id: profile.id,
     });
 
-    res.status(201).json({ message: 'User created successfully.', user: profile });
+    res.status(201).json({ message: 'User created successfully.', user: stripPasswordHash(profile) });
   } catch (err) {
     console.error('Create user error:', err);
     res.status(500).json({ error: err.message || 'Failed to create user.' });
@@ -98,10 +89,10 @@ const updateUser = async (req, res) => {
     if (current_rank !== undefined) updates.current_rank = current_rank;
     if (staff_category !== undefined) updates.staff_category = staff_category;
 
-    const { data, error } = await supabase.from('users').update(updates).eq('id', id).select().single();
-    if (error) throw error;
+    const [data] = await db('users').where({ id }).update(updates).returning('*');
 
-    await supabase.from('audit_logs').insert({
+    await db('audit_logs').insert({
+      id: uuidv4(),
       user_id: req.user.id,
       action: 'ADMIN_USER_UPDATED',
       entity_type: 'users',
@@ -109,7 +100,7 @@ const updateUser = async (req, res) => {
       new_data: updates,
     });
 
-    res.json({ message: 'User updated successfully.', user: data });
+    res.json({ message: 'User updated successfully.', user: stripPasswordHash(data) });
   } catch (err) {
     console.error('Update user error:', err);
     res.status(500).json({ error: 'Failed to update user.' });
@@ -121,9 +112,7 @@ const updateUser = async (req, res) => {
 const getDeadlines = async (req, res) => {
   try {
     const { year } = req.query;
-    const { data, error } = await supabase.from('appraisal_deadlines')
-      .select('*').eq('appraisal_year', year || '2025/2026').limit(1).single();
-    if (error && error.code !== 'PGRST116') throw error; // PGRST116 = not found
+    const data = await db('appraisal_deadlines').select('*').where({ appraisal_year: year || '2025/2026' }).first();
 
     if (!data) return res.json({ deadlines: [] });
 
@@ -157,15 +146,14 @@ const saveDeadline = async (req, res) => {
     if (!col) return res.status(400).json({ error: 'Invalid deadline type.' });
 
     // Upsert the row for this year
-    const { data: existing } = await supabase.from('appraisal_deadlines')
-      .select('id').eq('appraisal_year', year).single();
+    const existing = await db('appraisal_deadlines').select('id').where({ appraisal_year: year }).first();
 
     if (existing) {
-      await supabase.from('appraisal_deadlines').update({ [col]: date }).eq('id', existing.id);
+      await db('appraisal_deadlines').where({ id: existing.id }).update({ [col]: date });
     } else {
       const defaults = { staff_submission_deadline: date, hod_assessment_deadline: date, college_board_review_deadline: date, apc_review_deadline: date };
-      await supabase.from('appraisal_deadlines').insert({
-        appraisal_year: year, ...defaults, [col]: date, created_by: req.user.id,
+      await db('appraisal_deadlines').insert({
+        id: uuidv4(), appraisal_year: year, ...defaults, [col]: date, created_by: req.user.id,
       });
     }
 
@@ -181,12 +169,25 @@ const saveDeadline = async (req, res) => {
 const getAllAppraisals = async (req, res) => {
   try {
     const { year } = req.query;
-    let q = supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_id, department, college, current_rank, staff_category)');
-    if (year) q = q.eq('appraisal_year', year);
-    const { data, error } = await q.order('created_at', { ascending: false });
-    if (error) throw error;
-    res.json({ appraisals: data });
+    let q = db('appraisals')
+      .select(
+        'appraisals.*',
+        'u.full_name as u_full_name', 'u.staff_id as u_staff_id', 'u.department as u_department',
+        'u.college as u_college', 'u.current_rank as u_current_rank', 'u.staff_category as u_staff_category'
+      )
+      .leftJoin('users as u', 'appraisals.staff_id', 'u.id');
+    if (year) q = q.where('appraisals.appraisal_year', year);
+    const rows = await q.orderBy('appraisals.created_at', 'desc');
+
+    const appraisals = rows.map(({ u_full_name, u_staff_id, u_department, u_college, u_current_rank, u_staff_category, ...appraisal }) => ({
+      ...appraisal,
+      users: {
+        full_name: u_full_name, staff_id: u_staff_id, department: u_department,
+        college: u_college, current_rank: u_current_rank, staff_category: u_staff_category,
+      },
+    }));
+
+    res.json({ appraisals });
   } catch (err) {
     console.error('Get all appraisals error:', err);
     res.status(500).json({ error: 'Failed to fetch appraisals.' });
@@ -198,9 +199,7 @@ const getAllAppraisals = async (req, res) => {
 const getAuditLogs = async (req, res) => {
   try {
     const limitCount = parseInt(req.query.limit) || 100;
-    const { data, error } = await supabase.from('audit_logs').select('*')
-      .order('created_at', { ascending: false }).limit(limitCount);
-    if (error) throw error;
+    const data = await db('audit_logs').select('*').orderBy('created_at', 'desc').limit(limitCount);
     res.json({ logs: data });
   } catch (err) {
     console.error('Get audit logs error:', err);
@@ -212,9 +211,8 @@ const getAuditLogs = async (req, res) => {
 
 const getCycleStatus = async (req, res) => {
   try {
-    const { data, error } = await supabase.from('system_settings')
-      .select('key, value').in('key', ['cycle_open', 'current_appraisal_year']);
-    if (error) throw error;
+    const data = await db('system_settings')
+      .select('key', 'value').whereIn('key', ['cycle_open', 'current_appraisal_year']);
     const map = (data || []).reduce((acc, r) => ({ ...acc, [r.key]: r.value }), {});
     res.json({
       cycle_open: map.cycle_open === 'true',
@@ -228,8 +226,7 @@ const getCycleStatus = async (req, res) => {
 
 const getSettings = async (req, res) => {
   try {
-    const { data, error } = await supabase.from('system_settings').select('*');
-    if (error) throw error;
+    const data = await db('system_settings').select('*');
     const settings = (data || []).reduce((acc, row) => ({ ...acc, [row.key]: row.value }), {});
     res.json({ settings });
   } catch (err) {
@@ -244,10 +241,11 @@ const updateSettings = async (req, res) => {
     const rows = Object.entries(updates).map(([key, value]) => ({
       key, value: String(value), updated_at: new Date().toISOString(),
     }));
-    const { error } = await supabase.from('system_settings').upsert(rows, { onConflict: 'key' });
-    if (error) throw error;
-    await supabase.from('audit_logs').insert({
-      user_id: req.user.id, action: 'ADMIN_SETTINGS_UPDATED', entity_type: 'system_settings', entity_id: null,
+    if (rows.length) {
+      await db('system_settings').insert(rows).onConflict('key').merge();
+    }
+    await db('audit_logs').insert({
+      id: uuidv4(), user_id: req.user.id, action: 'ADMIN_SETTINGS_UPDATED', entity_type: 'system_settings', entity_id: null,
     });
     res.json({ message: 'Settings updated successfully.' });
   } catch (err) {
@@ -738,27 +736,22 @@ const bulkOnboard = async (req, res) => {
       });
     }
 
-    // Process rows sequentially (avoid rate-limiting Supabase auth)
+    // Processed sequentially — simple and safe for the ~90-row max this handles.
     for (const r of (results._rows || [])) {
       try {
-        const { data: authData, error: authErr } = await supabase.auth.admin.createUser({
-          email: r.email, password: r.password, email_confirm: true,
-        });
-
-        if (authErr) {
-          const isDupe = authErr.message?.includes('already') || authErr.message?.includes('exists');
-          results.errors.push({
-            sheet: r.sheet, row: r.row,
-            reason: `Row ${r.row} (${r.email}): ${isDupe ? 'Email already registered.' : authErr.message}`,
-          });
+        const existing = await db('users').where({ email: r.email }).first();
+        if (existing) {
+          results.errors.push({ sheet: r.sheet, row: r.row, reason: `Row ${r.row} (${r.email}): Email already registered.` });
           results.skipped++;
           continue;
         }
 
-        const { error: profileErr } = await supabase.from('users').insert({
-          id:                        authData.user.id,
+        const password_hash = await bcrypt.hash(r.password, 10);
+        await db('users').insert({
+          id:                        uuidv4(),
           email:                     r.email,
           full_name:                 r.full_name,
+          password_hash,
           role:                      r.role,
           staff_id:                  r.staff_id,
           sex:                       r.sex,
@@ -777,13 +770,6 @@ const bulkOnboard = async (req, res) => {
           is_active: true,
         });
 
-        if (profileErr) {
-          await supabase.auth.admin.deleteUser(authData.user.id);
-          results.errors.push({ sheet: r.sheet, row: r.row, reason: `Row ${r.row} (${r.email}): Profile error — ${profileErr.message}` });
-          results.skipped++;
-          continue;
-        }
-
         results.created++;
       } catch (err) {
         results.errors.push({ sheet: r.sheet, row: r.row, reason: `Row ${r.row}: Unexpected error — ${err.message}` });
@@ -793,7 +779,8 @@ const bulkOnboard = async (req, res) => {
 
     delete results._rows;
 
-    await supabase.from('audit_logs').insert({
+    await db('audit_logs').insert({
+      id: uuidv4(),
       user_id: req.user.id,
       action: 'BULK_ONBOARD',
       entity_type: 'users',

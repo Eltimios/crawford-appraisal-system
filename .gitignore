@@ -10,3 +10,6 @@
 # Environment files
 .env
 **/.env
+
+# Uploaded files (local disk storage — not source, not portable across machines)
+**/backend/uploads/

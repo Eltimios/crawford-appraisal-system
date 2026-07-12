@@ -24,7 +24,7 @@ const LoginPage = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  const [form, setForm] = useState({ email: '', password: '' });
+  const [form, setForm] = useState({ identifier: '', password: '' });
   const [errors, setErrors] = useState({});
   const [apiError, setApiError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -32,8 +32,7 @@ const LoginPage = () => {
 
   const validate = () => {
     const errs = {};
-    if (!form.email.trim()) errs.email = 'Email is required';
-    else if (!/\S+@\S+\.\S+/.test(form.email)) errs.email = 'Enter a valid email';
+    if (!form.identifier.trim()) errs.identifier = 'Staff ID or Email is required';
     if (!form.password) errs.password = 'Password is required';
     else if (form.password.length < 6) errs.password = 'Password must be at least 6 characters';
     return errs;
@@ -53,7 +52,7 @@ const LoginPage = () => {
     setSubmitting(true);
     setApiError('');
     try {
-      const profile = await login(form.email, form.password);
+      const profile = await login(form.identifier, form.password);
       const role = profile?.role;
       const redirect = roleRedirectMap[role] || '/staff';
       navigate(redirect, { replace: true });
@@ -129,19 +128,19 @@ const LoginPage = () => {
 
           <form onSubmit={handleSubmit} noValidate>
             <div className="form-group">
-              <label htmlFor="login-email" className="form-label">Email Address</label>
+              <label htmlFor="login-identifier" className="form-label">Staff ID or Email Address</label>
               <input
-                id="login-email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                placeholder="your.name@crawford.edu.ng"
-                value={form.email}
+                id="login-identifier"
+                name="identifier"
+                type="text"
+                autoComplete="username"
+                placeholder="CU/STF/001 or your.name@crawford.edu.ng"
+                value={form.identifier}
                 onChange={handleChange}
-                className={`form-input ${errors.email ? 'error' : ''}`}
+                className={`form-input ${errors.identifier ? 'error' : ''}`}
                 disabled={submitting}
               />
-              {errors.email && <p className="form-error">{errors.email}</p>}
+              {errors.identifier && <p className="form-error">{errors.identifier}</p>}
             </div>
 
             <div className="form-group">

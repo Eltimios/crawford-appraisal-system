@@ -17,8 +17,9 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import RegistryDashboard from './pages/registry/RegistryDashboard';
 import HRDashboard from './pages/hr/HRDashboard';
 import VCDashboard from './pages/vc/VCDashboard';
-import CouncilDashboard from './pages/council/CouncilDashboard';
 import ExternalAssessorPortal from './pages/ExternalAssessorPortal';
+// Council portal is temporarily hidden — progress now terminates at A&PC.
+// import CouncilDashboard from './pages/council/CouncilDashboard';
 
 const roleHomeMap = {
   staff: '/staff',
@@ -32,7 +33,6 @@ const roleHomeMap = {
   apc_senior:   '/apc-senior',
   registry: '/registry',
   hr_personnel: '/hr',
-  council: '/council',
   admin: '/admin',
 };
 
@@ -65,9 +65,6 @@ function App() {
             } />
             <Route path="/vc/*" element={
               <ProtectedRoute allowedRoles={['vc']}><VCDashboard /></ProtectedRoute>
-            } />
-            <Route path="/council/*" element={
-              <ProtectedRoute allowedRoles={['council']}><CouncilDashboard /></ProtectedRoute>
             } />
             <Route path="/apc-academic/*" element={
               <ProtectedRoute allowedRoles={['apc_academic']}><APCAcademicDashboard /></ProtectedRoute>

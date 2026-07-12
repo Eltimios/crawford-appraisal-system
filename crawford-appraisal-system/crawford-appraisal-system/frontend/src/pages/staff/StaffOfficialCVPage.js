@@ -111,9 +111,10 @@ const StaffOfficialCVPage = () => {
       <style>{`
         @media print {
           .cv-no-print { display: none !important; }
-          body > * { display: none !important; }
+          body * { visibility: hidden; }
+          #official-cv-doc, #official-cv-doc * { visibility: visible !important; }
           #official-cv-doc {
-            display: block !important; position: static !important;
+            display: block !important; position: absolute !important; left: 0; top: 0; width: 100%;
             box-shadow: none !important; border: none !important;
             max-width: none !important; margin: 0 !important; padding: 0 !important;
           }

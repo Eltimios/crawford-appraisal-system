@@ -1,23 +1,35 @@
-const { supabase } = require('../config/supabase');
+const bcrypt = require('bcryptjs');
+const { v4: uuidv4 } = require('uuid');
+const { db } = require('../config/db');
+const { stripPasswordHash } = require('../utils/sanitizeUser');
 const ExcelJS = require('exceljs');
 
 const logAudit = async (userId, action, entityType, entityId) => {
   try {
-    await supabase.from('audit_logs').insert({ user_id: userId, action, entity_type: entityType, entity_id: entityId });
+    await db('audit_logs').insert({ id: uuidv4(), user_id: userId, action, entity_type: entityType, entity_id: entityId });
   } catch (err) { console.error('Audit log error:', err); }
+};
+
+// Attaches each user's related appraisals as `appraisals: [...]` — replicates the
+// one-to-many `appraisals!appraisals_staff_id_fkey(...)` embed Supabase used to do.
+const attachAppraisals = async (users, columns = ['id', 'staff_id', 'status', 'appraisal_year', 'apc_decision']) => {
+  const userIds = users.map(u => u.id);
+  if (!userIds.length) return users.map(u => ({ ...u, appraisals: [] }));
+  const appraisals = await db('appraisals').select(...columns).whereIn('staff_id', userIds);
+  const byStaff = appraisals.reduce((acc, a) => {
+    (acc[a.staff_id] = acc[a.staff_id] || []).push(a);
+    return acc;
+  }, {});
+  return users.map(u => ({ ...u, appraisals: byStaff[u.id] || [] }));
 };
 
 // GET /api/hr/stats
 const getHRStats = async (req, res) => {
   try {
-    const [
-      { data: teaching },
-      { data: junior },
-      { data: senior },
-    ] = await Promise.all([
-      supabase.from('users').select('id').eq('staff_category', 'academic').eq('is_active', true),
-      supabase.from('users').select('id').eq('staff_category', 'junior_nonteaching').eq('is_active', true),
-      supabase.from('users').select('id').eq('staff_category', 'senior_nonteaching').eq('is_active', true),
+    const [teaching, junior, senior] = await Promise.all([
+      db('users').select('id').where({ staff_category: 'academic', is_active: true }),
+      db('users').select('id').where({ staff_category: 'junior_nonteaching', is_active: true }),
+      db('users').select('id').where({ staff_category: 'senior_nonteaching', is_active: true }),
     ]);
 
     res.json({
@@ -37,27 +49,22 @@ const getTeachingStaff = async (req, res) => {
   try {
     const { q, department } = req.query;
 
-    let query = supabase.from('users')
-      .select(`
-        id, full_name, staff_id, email, department, college,
-        current_rank, staff_category, is_active,
-        appraisals!appraisals_staff_id_fkey(id, status, appraisal_year, apc_decision)
-      `)
-      .eq('staff_category', 'academic')
-      .eq('is_active', true)
-      .order('full_name');
+    let query = db('users')
+      .select('id', 'full_name', 'staff_id', 'email', 'department', 'college', 'current_rank', 'staff_category', 'is_active')
+      .where({ staff_category: 'academic', is_active: true })
+      .orderBy('full_name');
 
-    if (department) query = query.eq('department', department);
+    if (department) query = query.andWhere({ department });
 
-    const { data, error } = await query;
-    if (error) throw error;
+    const users = await query;
+    const withAppraisals = await attachAppraisals(users, ['id', 'staff_id', 'status', 'appraisal_year', 'apc_decision']);
 
     const filtered = q
-      ? (data || []).filter(u =>
+      ? withAppraisals.filter(u =>
           u.full_name?.toLowerCase().includes(q.toLowerCase()) ||
           u.staff_id?.toLowerCase().includes(q.toLowerCase())
         )
-      : data;
+      : withAppraisals;
 
     res.json({ staff: filtered || [] });
   } catch (err) {
@@ -76,32 +83,28 @@ const getNonTeachingStaff = async (req, res) => {
       senior: 'senior_nonteaching',
     };
 
-    let query = supabase.from('users')
-      .select(`
-        id, full_name, staff_id, email, department, college,
-        current_rank, staff_category, is_active, reporting_officer_id,
-        appraisals!appraisals_staff_id_fkey(id, status, appraisal_year, apc_decision, registry_validated)
-      `)
-      .eq('is_active', true)
-      .order('full_name');
+    let query = db('users')
+      .select('id', 'full_name', 'staff_id', 'email', 'department', 'college', 'current_rank', 'staff_category', 'is_active', 'reporting_officer_id')
+      .where({ is_active: true })
+      .orderBy('full_name');
 
     if (type && categoryMap[type]) {
-      query = query.eq('staff_category', categoryMap[type]);
+      query = query.andWhere({ staff_category: categoryMap[type] });
     } else {
-      query = query.in('staff_category', ['junior_nonteaching', 'senior_nonteaching']);
+      query = query.whereIn('staff_category', ['junior_nonteaching', 'senior_nonteaching']);
     }
 
-    if (department) query = query.eq('department', department);
+    if (department) query = query.andWhere({ department });
 
-    const { data, error } = await query;
-    if (error) throw error;
+    const users = await query;
+    const withAppraisals = await attachAppraisals(users, ['id', 'staff_id', 'status', 'appraisal_year', 'apc_decision', 'registry_validated']);
 
     const filtered = q
-      ? (data || []).filter(u =>
+      ? withAppraisals.filter(u =>
           u.full_name?.toLowerCase().includes(q.toLowerCase()) ||
           u.staff_id?.toLowerCase().includes(q.toLowerCase())
         )
-      : data;
+      : withAppraisals;
 
     res.json({ staff: filtered || [] });
   } catch (err) {
@@ -115,21 +118,16 @@ const getStaffAppraisalForPrint = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data: user, error: userErr } = await supabase.from('users')
-      .select('*').eq('id', id).single();
-    if (userErr || !user) return res.status(404).json({ error: 'Staff member not found.' });
+    const user = await db('users').select('*').where({ id }).first();
+    if (!user) return res.status(404).json({ error: 'Staff member not found.' });
 
-    const { data: appraisal, error: appErr } = await supabase.from('appraisals')
-      .select('*')
-      .eq('staff_id', id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    if (appErr && appErr.code !== 'PGRST116') throw appErr;
+    const appraisal = await db('appraisals').select('*')
+      .where({ staff_id: id })
+      .orderBy('created_at', 'desc')
+      .first();
 
     await logAudit(req.user.id, 'HR_APPRAISAL_VIEWED', 'users', id);
-    res.json({ user, appraisal: appraisal || null });
+    res.json({ user: stripPasswordHash(user), appraisal: appraisal || null });
   } catch (err) {
     console.error('Get staff appraisal for print error:', err);
     res.status(500).json({ error: 'Failed to fetch staff appraisal.' });
@@ -141,27 +139,25 @@ const exportNominalRoll = async (req, res) => {
   try {
     const { category, type } = req.query;
 
-    let query = supabase.from('users').select(`
-      id, full_name, staff_id, email, department, college,
-      current_rank, staff_category, date_of_first_appointment, date_of_last_promotion, is_active,
-      appraisals!appraisals_staff_id_fkey(id, status, appraisal_year, apc_decision, registry_validated,
-        hod_recommendation, hod_assessed_at)
-    `).eq('is_active', true).order('full_name');
+    let query = db('users').select(
+      'id', 'full_name', 'staff_id', 'email', 'department', 'college',
+      'current_rank', 'staff_category', 'date_of_first_appointment', 'date_of_last_promotion', 'is_active'
+    ).where({ is_active: true }).orderBy('full_name');
 
     if (category === 'teaching') {
-      query = query.eq('staff_category', 'academic');
+      query = query.andWhere({ staff_category: 'academic' });
     } else if (category === 'non-teaching') {
       if (type === 'junior') {
-        query = query.eq('staff_category', 'junior_nonteaching');
+        query = query.andWhere({ staff_category: 'junior_nonteaching' });
       } else if (type === 'senior') {
-        query = query.eq('staff_category', 'senior_nonteaching');
+        query = query.andWhere({ staff_category: 'senior_nonteaching' });
       } else {
-        query = query.in('staff_category', ['junior_nonteaching', 'senior_nonteaching']);
+        query = query.whereIn('staff_category', ['junior_nonteaching', 'senior_nonteaching']);
       }
     }
 
-    const { data: staff, error } = await query;
-    if (error) throw error;
+    const users = await query;
+    const staff = await attachAppraisals(users, ['id', 'staff_id', 'status', 'appraisal_year', 'apc_decision', 'registry_validated', 'hod_recommendation', 'hod_assessed_at']);
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Crawford University Appraisal System';
@@ -270,32 +266,47 @@ const exportNominalRoll = async (req, res) => {
   }
 };
 
+// Shared join for appraisals + their staff user, filtered by year + has an APC decision.
+// Replicates the many-to-one `users!appraisals_staff_id_fkey(...)` embed.
+const fetchRecommendationRecords = async (year, recommendation) => {
+  let query = db('appraisals as a')
+    .select(
+      'a.id', 'a.appraisal_year', 'a.status', 'a.hod_recommendation',
+      'a.apc_decision', 'a.council_decision', 'a.registry_validated', 'a.college_board_status', 'a.college_board_recommendation',
+      'u.id as u_id', 'u.full_name as u_full_name', 'u.staff_id as u_staff_id', 'u.email as u_email',
+      'u.department as u_department', 'u.college as u_college', 'u.current_rank as u_current_rank',
+      'u.staff_category as u_staff_category', 'u.date_of_first_appointment as u_date_of_first_appointment',
+      'u.date_of_last_promotion as u_date_of_last_promotion'
+    )
+    .leftJoin('users as u', 'a.staff_id', 'u.id')
+    .where('a.appraisal_year', year)
+    .whereNotNull('a.apc_decision');
+
+  if (recommendation !== 'all') {
+    query = query.whereRaw("a.apc_decision->>'decision' = ?", [recommendation]);
+  }
+
+  const rows = await query;
+
+  return rows
+    .filter(r => r.u_id)
+    .map(({ u_id, u_full_name, u_staff_id, u_email, u_department, u_college, u_current_rank, u_staff_category, u_date_of_first_appointment, u_date_of_last_promotion, ...a }) => ({
+      ...a,
+      users: {
+        id: u_id, full_name: u_full_name, staff_id: u_staff_id, email: u_email,
+        department: u_department, college: u_college, current_rank: u_current_rank,
+        staff_category: u_staff_category, date_of_first_appointment: u_date_of_first_appointment,
+        date_of_last_promotion: u_date_of_last_promotion,
+      },
+    }));
+};
+
 // GET /api/hr/recommendations  — JSON list for the preview table
 const getRecommendations = async (req, res) => {
   try {
     const { year = '2025/2026', recommendation = 'all', category = 'all' } = req.query;
 
-    let query = supabase.from('appraisals')
-      .select(`
-        id, appraisal_year, status, hod_recommendation,
-        apc_decision, council_decision, registry_validated, college_board_status, college_board_recommendation,
-        users!appraisals_staff_id_fkey(
-          id, full_name, staff_id, email, department, college,
-          current_rank, staff_category,
-          date_of_first_appointment, date_of_last_promotion
-        )
-      `)
-      .eq('appraisal_year', year)
-      .not('apc_decision', 'is', null);
-
-    if (recommendation !== 'all') {
-      query = query.filter('apc_decision->>decision', 'eq', recommendation);
-    }
-
-    const { data, error } = await query;
-    if (error) throw error;
-
-    let result = (data || []).filter(a => a.users);
+    let result = await fetchRecommendationRecords(year, recommendation);
 
     if (category === 'teaching') {
       result = result.filter(a => a.users?.staff_category === 'academic');
@@ -323,27 +334,7 @@ const exportRecommendations = async (req, res) => {
   try {
     const { year = '2025/2026', recommendation = 'all', category = 'all' } = req.query;
 
-    let query = supabase.from('appraisals')
-      .select(`
-        id, appraisal_year, status, hod_recommendation,
-        apc_decision, council_decision, registry_validated, college_board_status, college_board_recommendation,
-        users!appraisals_staff_id_fkey(
-          id, full_name, staff_id, email, department, college,
-          current_rank, staff_category,
-          date_of_first_appointment, date_of_last_promotion
-        )
-      `)
-      .eq('appraisal_year', year)
-      .not('apc_decision', 'is', null);
-
-    if (recommendation !== 'all') {
-      query = query.filter('apc_decision->>decision', 'eq', recommendation);
-    }
-
-    const { data, error } = await query;
-    if (error) throw error;
-
-    let records = (data || []).filter(a => a.users);
+    let records = await fetchRecommendationRecords(year, recommendation);
 
     if (category === 'teaching') {
       records = records.filter(a => a.users?.staff_category === 'academic');
@@ -599,19 +590,13 @@ const onboardStaff = async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     }
 
-    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-      email, password, email_confirm: true,
-    });
-    if (authError) {
-      if (authError.message?.includes('already registered') || authError.message?.includes('already exists')) {
-        return res.status(409).json({ error: 'A user with this email already exists.' });
-      }
-      throw authError;
-    }
+    const existing = await db('users').where({ email }).first();
+    if (existing) return res.status(409).json({ error: 'A user with this email already exists.' });
 
-    const uid = authData.user.id;
-    const { data: profile, error: profileError } = await supabase.from('users').insert({
-      id: uid, email, full_name, role,
+    const password_hash = await bcrypt.hash(password, 10);
+    const uid = uuidv4();
+    const [profile] = await db('users').insert({
+      id: uid, email, full_name, role, password_hash,
       staff_id:                  staff_id                  || null,
       department:                department                || null,
       college:                   college                   || null,
@@ -628,15 +613,10 @@ const onboardStaff = async (req, res) => {
       date_of_last_promotion:    date_of_last_promotion    || null,
       confirmation_date:         confirmation_date         || null,
       is_active: true,
-    }).select().single();
-
-    if (profileError) {
-      await supabase.auth.admin.deleteUser(uid).catch(() => {});
-      throw profileError;
-    }
+    }).returning('*');
 
     await logAudit(req.user.id, 'HR_STAFF_ONBOARDED', 'users', uid);
-    res.status(201).json({ message: 'Staff member onboarded successfully.', user: profile });
+    res.status(201).json({ message: 'Staff member onboarded successfully.', user: stripPasswordHash(profile) });
   } catch (err) {
     console.error('Onboard staff error:', err);
     res.status(500).json({ error: err.message || 'Failed to onboard staff member.' });
@@ -653,24 +633,22 @@ const updateStaff = async (req, res) => {
       date_of_first_appointment, date_of_last_promotion,
     } = req.body;
 
-    const { data, error } = await supabase.from('users').update({
-      full_name:               full_name               || undefined,
-      staff_id:                staff_id                || undefined,
-      role:                    role                    || undefined,
-      staff_category:          staff_category          || undefined,
-      department:              department              ?? undefined,
-      college:                 college                 ?? undefined,
-      current_rank:            current_rank            ?? undefined,
-      reporting_officer_id:    reporting_officer_id    || null,
-      date_of_first_appointment: date_of_first_appointment || undefined,
-      date_of_last_promotion:  date_of_last_promotion  || undefined,
-      updated_at:              new Date().toISOString(),
-    }).eq('id', id).select().single();
+    const updates = { updated_at: new Date().toISOString() };
+    if (full_name) updates.full_name = full_name;
+    if (staff_id) updates.staff_id = staff_id;
+    if (role) updates.role = role;
+    if (staff_category) updates.staff_category = staff_category;
+    if (department !== undefined && department !== null) updates.department = department;
+    if (college !== undefined && college !== null) updates.college = college;
+    if (current_rank !== undefined && current_rank !== null) updates.current_rank = current_rank;
+    updates.reporting_officer_id = reporting_officer_id || null;
+    if (date_of_first_appointment) updates.date_of_first_appointment = date_of_first_appointment;
+    if (date_of_last_promotion) updates.date_of_last_promotion = date_of_last_promotion;
 
-    if (error) throw error;
+    const [data] = await db('users').where({ id }).update(updates).returning('*');
 
     await logAudit(req.user.id, 'HR_STAFF_UPDATED', 'users', id);
-    res.json({ message: 'Staff profile updated.', user: data });
+    res.json({ message: 'Staff profile updated.', user: stripPasswordHash(data) });
   } catch (err) {
     console.error('Update staff error:', err);
     res.status(500).json({ error: err.message || 'Failed to update staff profile.' });
@@ -680,12 +658,10 @@ const updateStaff = async (req, res) => {
 // GET /api/hr/reporting-officers  — populate the dropdown in the onboard modal
 const getReportingOfficers = async (req, res) => {
   try {
-    const { data, error } = await supabase.from('users')
-      .select('id, full_name, department')
-      .eq('role', 'reporting_officer')
-      .eq('is_active', true)
-      .order('full_name');
-    if (error) throw error;
+    const data = await db('users')
+      .select('id', 'full_name', 'department')
+      .where({ role: 'reporting_officer', is_active: true })
+      .orderBy('full_name');
     res.json({ reporting_officers: data || [] });
   } catch (err) {
     console.error('Get reporting officers error:', err);

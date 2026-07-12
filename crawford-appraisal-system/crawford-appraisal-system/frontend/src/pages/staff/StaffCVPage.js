@@ -91,9 +91,9 @@ const StaffCVPage = () => {
       {/* ── Print styles ── */}
       <style>{`
         @media print {
-          body > * { display: none !important; }
-          #cv-print-root { display: block !important; }
-          #cv-print-root * { visibility: visible !important; }
+          body * { visibility: hidden; }
+          #cv-print-root, #cv-print-root * { visibility: visible !important; }
+          #cv-print-root { display: block !important; position: absolute; left: 0; top: 0; width: 100%; }
           .cv-screen-only { display: none !important; }
           @page { margin: 18mm 20mm; size: A4; }
         }

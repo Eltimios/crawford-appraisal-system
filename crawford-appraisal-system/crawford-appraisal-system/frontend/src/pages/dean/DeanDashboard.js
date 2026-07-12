@@ -7,9 +7,11 @@ import VCAssessDeansPage from './VCAssessDeansPage';
 import DisputesPage from './DisputesPage';
 import CollegeOverviewPage from './CollegeOverviewPage';
 import DeanPublicationsPage from './DeanPublicationsPage';
+import PublicationsPage from '../staff/PublicationsPage';
 import MyAssessmentPage from '../staff/MyAssessmentPage';
 import StaffBiodataPage from '../staff/StaffBiodataPage';
 import StaffCVPage from '../staff/StaffCVPage';
+import StaffOfficialCVPage from '../staff/StaffOfficialCVPage';
 import NotificationsPage from '../shared/NotificationsPage';
 import ProfilePage from '../shared/ProfilePage';
 import ReviewQueuePage from '../collegeBoard/ReviewQueuePage';
@@ -28,6 +30,7 @@ const DeanDashboard = () => (
       <Route path="assess-deans" element={<VCAssessDeansPage />} />
       <Route path="disputes" element={<DisputesPage />} />
       <Route path="overview" element={<CollegeOverviewPage />} />
+      <Route path="my-publications" element={<PublicationsPage />} />
       <Route path="publications" element={<DeanPublicationsPage />} />
       <Route path="college-review" element={<CollegeReviewPage />} />
       <Route path="review" element={<ReviewQueuePage />} />
@@ -36,6 +39,7 @@ const DeanDashboard = () => (
       <Route path="assessors" element={<DeanAssessorsPage />} />
       <Route path="biodata" element={<StaffBiodataPage />} />
       <Route path="cv" element={<StaffCVPage />} />
+      <Route path="official-cv" element={<StaffOfficialCVPage />} />
       <Route path="notifications" element={<NotificationsPage />} />
       <Route path="profile" element={<ProfilePage />} />
     </Routes>

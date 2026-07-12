@@ -1,34 +1,44 @@
-const { supabase, supabaseAuth } = require('../config/supabase');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { db } = require('../config/db');
+const { stripPasswordHash } = require('../utils/sanitizeUser');
 
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email and password are required.' });
+    const { identifier, password } = req.body;
+    if (!identifier || !password) return res.status(400).json({ error: 'Staff ID / Email and password are required.' });
 
-    // Use supabaseAuth (isolated client) so the session is NOT set on the
-    // service-role supabase client — that would make all subsequent DB calls
-    // run as the user role and trigger RLS violations.
-    const { data, error } = await supabaseAuth.auth.signInWithPassword({ email, password });
-    if (error) return res.status(401).json({ error: 'Invalid email or password.' });
+    let email = identifier.trim();
+    if (!email.includes('@')) {
+      // Not an email — treat as Staff ID and resolve to the account's email.
+      const staffRecord = await db('users').select('email').whereRaw('staff_id ILIKE ?', [email]).first();
+      if (!staffRecord) return res.status(401).json({ error: 'Invalid Staff ID/Email or password.' });
+      email = staffRecord.email;
+    }
 
-    // Profile fetch via the service-role client (RLS-bypassed, always clean)
-    const { data: profile, error: profileError } = await supabase
-      .from('users').select('*').eq('id', data.user.id).single();
-    if (profileError) return res.status(500).json({ error: 'Failed to fetch user profile.' });
+    const user = await db('users').where({ email }).first();
+    if (!user) return res.status(401).json({ error: 'Invalid Staff ID/Email or password.' });
+
+    const passwordMatches = await bcrypt.compare(password, user.password_hash);
+    if (!passwordMatches) return res.status(401).json({ error: 'Invalid Staff ID/Email or password.' });
+
+    const token = jwt.sign({ sub: user.id }, process.env.JWT_SECRET, {
+      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    });
 
     res.json({
       message: 'Login successful',
-      token: data.session.access_token,
+      token,
       user: {
-        id: profile.id,
-        email: profile.email,
-        full_name: profile.full_name,
-        role: profile.role,
-        staff_category: profile.staff_category,
-        department: profile.department,
-        college: profile.college,
-        current_rank: profile.current_rank,
-        staff_id: profile.staff_id,
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        role: user.role,
+        staff_category: user.staff_category,
+        department: user.department,
+        college: user.college,
+        current_rank: user.current_rank,
+        staff_id: user.staff_id,
       }
     });
   } catch (err) {
@@ -43,7 +53,7 @@ const logout = async (_req, res) => {
 
 const getProfile = async (req, res) => {
   try {
-    res.json({ user: req.user });
+    res.json({ user: stripPasswordHash(req.user) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch profile.' });
   }
@@ -55,8 +65,7 @@ const updateProfile = async (req, res) => {
     if (!full_name?.trim()) return res.status(400).json({ error: 'Full name is required.' });
     const updates = { full_name: full_name.trim() };
     if (highest_qualification !== undefined) updates.highest_qualification = highest_qualification;
-    const { error } = await supabase.from('users').update(updates).eq('id', req.user.id);
-    if (error) throw error;
+    await db('users').where({ id: req.user.id }).update(updates);
     res.json({ message: 'Profile updated successfully.' });
   } catch (err) {
     console.error('Update profile error:', err);
@@ -70,9 +79,8 @@ const updatePassword = async (req, res) => {
     if (!new_password || new_password.length < 8) {
       return res.status(400).json({ error: 'Password must be at least 8 characters long.' });
     }
-    // Use admin API — no user session needed, service role handles it
-    const { error } = await supabase.auth.admin.updateUserById(req.user.id, { password: new_password });
-    if (error) throw error;
+    const password_hash = await bcrypt.hash(new_password, 10);
+    await db('users').where({ id: req.user.id }).update({ password_hash });
     res.json({ message: 'Password updated successfully.' });
   } catch (err) {
     console.error('Update password error:', err);
@@ -84,14 +92,15 @@ const resetPassword = async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required.' });
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${process.env.FRONTEND_URL}/reset-password`
-    });
-    if (error) throw error;
-    res.json({ message: 'Password reset email sent. Please check your inbox.' });
+    // NOTE: this previously relied on Supabase's hosted reset-password email,
+    // which had no corresponding frontend page to complete the flow anyway.
+    // Kept as a stub with the same response shape — always generic, so the
+    // endpoint doesn't leak which emails are registered — pending a follow-up
+    // pass to wire up real delivery (nodemailer) and a reset-password page.
+    res.json({ message: 'If an account with that email exists, password reset instructions will be sent.' });
   } catch (err) {
     console.error('Reset password error:', err);
-    res.status(500).json({ error: 'Failed to send reset email.' });
+    res.status(500).json({ error: 'Failed to process password reset request.' });
   }
 };
 

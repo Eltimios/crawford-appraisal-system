@@ -1,4 +1,6 @@
-const { supabase } = require('../config/supabase');
+const { v4: uuidv4 } = require('uuid');
+const { db } = require('../config/db');
+const { savePublicFile, deletePublicFile } = require('../config/storage');
 
 const PUBLICATION_SCORES = {
   journal_article: 3, refereed_book: 4, edited_book: 3, chapter_in_book: 2,
@@ -24,17 +26,15 @@ const uploadPublication = async (req, res) => {
 
     let file_url = null, file_name = null, file_size = null;
     if (req.file) {
-      const fileName = `publications/${req.user.id}/${Date.now()}_${req.file.originalname}`;
-      const { error: uploadError } = await supabase.storage.from('publications')
-        .upload(fileName, req.file.buffer, { contentType: req.file.mimetype, upsert: false });
-      if (uploadError) throw uploadError;
-      const { data: urlData } = supabase.storage.from('publications').getPublicUrl(fileName);
-      file_url = urlData.publicUrl;
+      const relativePath = `${req.user.id}/${Date.now()}_${req.file.originalname}`;
+      const urlPath = savePublicFile('publications', relativePath, req.file.buffer);
+      file_url = `${req.protocol}://${req.get('host')}${urlPath}`;
       file_name = req.file.originalname;
       file_size = req.file.size;
     }
 
-    const { data, error } = await supabase.from('publications').insert({
+    const [data] = await db('publications').insert({
+      id: uuidv4(),
       staff_id: req.user.id, title, publication_type, journal_name, publisher,
       year_of_publication: year_of_publication ? parseInt(year_of_publication) : null,
       authorship_position, is_international: is_international === 'true' || is_international === true,
@@ -42,8 +42,7 @@ const uploadPublication = async (req, res) => {
       is_acceptance_letter: is_acceptance_letter === 'true' || is_acceptance_letter === true,
       acceptance_letter_date: acceptance_letter_date || null,
       file_url, file_name, file_size, available_score, points_scored, status: 'active',
-    }).select().single();
-    if (error) throw error;
+    }).returning('*');
 
     res.status(201).json({ message: 'Publication uploaded successfully.', publication: data });
   } catch (err) {
@@ -54,9 +53,8 @@ const uploadPublication = async (req, res) => {
 
 const getMyPublications = async (req, res) => {
   try {
-    const { data, error } = await supabase.from('publications').select('*')
-      .eq('staff_id', req.user.id).order('year_of_publication', { ascending: false });
-    if (error) throw error;
+    const data = await db('publications').select('*')
+      .where({ staff_id: req.user.id }).orderBy('year_of_publication', 'desc');
 
     const totalAvailable = data.reduce((s, p) => s + (p.available_score || 0), 0);
     const totalScored = data.reduce((s, p) => s + (p.points_scored || 0), 0);
@@ -70,9 +68,8 @@ const getMyPublications = async (req, res) => {
 const getStaffPublications = async (req, res) => {
   try {
     const { staffId } = req.params;
-    const { data, error } = await supabase.from('publications').select('*')
-      .eq('staff_id', staffId).eq('status', 'active').order('year_of_publication', { ascending: false });
-    if (error) throw error;
+    const data = await db('publications').select('*')
+      .where({ staff_id: staffId, status: 'active' }).orderBy('year_of_publication', 'desc');
     res.json({ publications: data });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch staff publications.' });
@@ -83,9 +80,8 @@ const calculatePublicationPoints = async (req, res) => {
   try {
     const { staffId } = req.params;
     const { target_rank } = req.query;
-    const { data: publications, error } = await supabase.from('publications').select('*')
-      .eq('staff_id', staffId).eq('status', 'active').eq('is_predatory', false);
-    if (error) throw error;
+    const publications = await db('publications').select('*')
+      .where({ staff_id: staffId, status: 'active', is_predatory: false });
 
     const C = C_VALUES[target_rank] || 40;
     const sumA = publications.reduce((s, p) => s + (p.available_score || 0), 0);
@@ -115,22 +111,27 @@ const getDepartmentPublications = async (req, res) => {
       ? ['academic']
       : ['senior_nonteaching', 'junior_nonteaching'];
 
-    const { data: deptStaff, error: staffErr } = await supabase
-      .from('users').select('id')
-      .eq('department', req.user.department)
-      .in('staff_category', accessibleCategories)
-      .neq('id', req.user.id);
-    if (staffErr) throw staffErr;
+    const deptStaff = await db('users').select('id')
+      .where({ department: req.user.department })
+      .whereIn('staff_category', accessibleCategories)
+      .whereNot({ id: req.user.id });
 
-    const staffIds = (deptStaff || []).map(u => u.id);
+    const staffIds = deptStaff.map(u => u.id);
     if (staffIds.length === 0) return res.json({ publications: [] });
 
-    const { data, error } = await supabase.from('publications')
-      .select('*, users!publications_staff_id_fkey(full_name, current_rank, department)')
-      .in('staff_id', staffIds)
-      .eq('status', 'active')
-      .order('year_of_publication', { ascending: false });
-    if (error) throw error;
+    const rows = await db('publications')
+      .select(
+        'publications.*',
+        'u.full_name as u_full_name', 'u.current_rank as u_current_rank', 'u.department as u_department'
+      )
+      .leftJoin('users as u', 'publications.staff_id', 'u.id')
+      .whereIn('publications.staff_id', staffIds)
+      .andWhere('publications.status', 'active')
+      .orderBy('publications.year_of_publication', 'desc');
+
+    const data = rows.map(({ u_full_name, u_current_rank, u_department, ...pub }) => ({
+      ...pub, users: { full_name: u_full_name, current_rank: u_current_rank, department: u_department },
+    }));
     res.json({ publications: data });
   } catch (err) {
     console.error('Get department publications error:', err);
@@ -140,21 +141,26 @@ const getDepartmentPublications = async (req, res) => {
 
 const getCollegePublications = async (req, res) => {
   try {
-    const { data: collegeStaff, error: staffErr } = await supabase
-      .from('users').select('id')
-      .eq('college', req.user.college)
-      .neq('id', req.user.id);
-    if (staffErr) throw staffErr;
+    const collegeStaff = await db('users').select('id')
+      .where({ college: req.user.college })
+      .whereNot({ id: req.user.id });
 
-    const staffIds = (collegeStaff || []).map(u => u.id);
+    const staffIds = collegeStaff.map(u => u.id);
     if (staffIds.length === 0) return res.json({ publications: [] });
 
-    const { data, error } = await supabase.from('publications')
-      .select('*, users!publications_staff_id_fkey(full_name, current_rank, department)')
-      .in('staff_id', staffIds)
-      .eq('status', 'active')
-      .order('year_of_publication', { ascending: false });
-    if (error) throw error;
+    const rows = await db('publications')
+      .select(
+        'publications.*',
+        'u.full_name as u_full_name', 'u.current_rank as u_current_rank', 'u.department as u_department'
+      )
+      .leftJoin('users as u', 'publications.staff_id', 'u.id')
+      .whereIn('publications.staff_id', staffIds)
+      .andWhere('publications.status', 'active')
+      .orderBy('publications.year_of_publication', 'desc');
+
+    const data = rows.map(({ u_full_name, u_current_rank, u_department, ...pub }) => ({
+      ...pub, users: { full_name: u_full_name, current_rank: u_current_rank, department: u_department },
+    }));
     res.json({ publications: data });
   } catch (err) {
     console.error('Get college publications error:', err);
@@ -165,16 +171,15 @@ const getCollegePublications = async (req, res) => {
 const deletePublication = async (req, res) => {
   try {
     const { id } = req.params;
-    const { data: pub } = await supabase.from('publications').select('*').eq('id', id).eq('staff_id', req.user.id).single();
+    const pub = await db('publications').select('*').where({ id, staff_id: req.user.id }).first();
     if (!pub) return res.status(404).json({ error: 'Publication not found.' });
 
     if (pub.file_url) {
-      const path = pub.file_url.split('/object/public/publications/')[1];
-      if (path) await supabase.storage.from('publications').remove([path]);
+      const relPath = pub.file_url.split('/uploads/publications/')[1];
+      if (relPath) deletePublicFile('publications', decodeURIComponent(relPath));
     }
 
-    const { error } = await supabase.from('publications').delete().eq('id', id);
-    if (error) throw error;
+    await db('publications').where({ id }).del();
     res.json({ message: 'Publication deleted successfully.' });
   } catch (err) {
     console.error('Delete publication error:', err);

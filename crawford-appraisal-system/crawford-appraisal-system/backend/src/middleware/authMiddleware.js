@@ -1,4 +1,6 @@
-const { supabase } = require('../config/supabase');
+const jwt = require('jsonwebtoken');
+const { db } = require('../config/db');
+const { stripPasswordHash } = require('../utils/sanitizeUser');
 
 const authenticate = async (req, res, next) => {
   try {
@@ -9,33 +11,23 @@ const authenticate = async (req, res, next) => {
 
     const token = authHeader.split(' ')[1];
 
-    // Decode the JWT payload directly — avoids calling supabase.auth.getUser()
-    // which mutates the client's internal auth state and causes subsequent DB
-    // writes to execute as the "authenticated" role (triggering RLS errors)
-    // instead of the service_role that bypasses RLS.
     let payload;
     try {
-      const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-      payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf8'));
-    } catch {
-      return res.status(401).json({ error: 'Invalid token format. Please log in again.' });
+      payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({ error: 'Token expired. Please log in again.' });
+      }
+      return res.status(401).json({ error: 'Invalid token. Please log in again.' });
     }
 
     if (!payload.sub) {
       return res.status(401).json({ error: 'Invalid token. Please log in again.' });
     }
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-      return res.status(401).json({ error: 'Token expired. Please log in again.' });
-    }
 
-    // Fetch profile via the service-role client — this call is pure DB, no auth mutation
-    const { data: profile, error: profileError } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', payload.sub)
-      .single();
+    const profile = await db('users').where({ id: payload.sub }).first();
 
-    if (profileError || !profile) {
+    if (!profile) {
       return res.status(401).json({ error: 'User profile not found.' });
     }
 
@@ -43,7 +35,7 @@ const authenticate = async (req, res, next) => {
       return res.status(403).json({ error: 'Account is deactivated. Contact administrator.' });
     }
 
-    req.user = profile;
+    req.user = stripPasswordHash(profile);
     next();
   } catch (err) {
     console.error('Authentication error:', err);

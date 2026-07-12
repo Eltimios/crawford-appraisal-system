@@ -20,9 +20,9 @@ const STATUS_CONFIG = {
   dispute_raised:               { label: 'Invalidation Submitted',           short: 'Invalidated',  badge: 'badge-warning' },
   disputed:                     { label: 'Invalidation Pending — Awaiting Dean', short: 'Invalidated',  badge: 'badge-danger'  },
   dean_resolved:                { label: 'Invalidation Resolved',            short: 'Resolved',     badge: 'badge-success' },
-  apc_recommended:              { label: 'A&PC Review — Pending Council',    short: 'A&PC Reviewed',   badge: 'badge-success' },
-  pending_council:              { label: 'Pending Council Approval',         short: 'Pending Council', badge: 'badge-info'    },
-  council_decided:              { label: 'Council Decision Recorded',        short: 'Council Decided', badge: 'badge-success' },
+  apc_recommended:              { label: 'A&PC Decision — Final',            short: 'A&PC Decided',    badge: 'badge-success' },
+  pending_council:              { label: 'A&PC Decision — Final',            short: 'A&PC Decided',    badge: 'badge-success' },
+  council_decided:              { label: 'A&PC Decision — Final',            short: 'A&PC Decided',    badge: 'badge-success' },
   completed:                    { label: 'Completed',                short: 'Completed',    badge: 'badge-success' },
 };
 
@@ -99,14 +99,9 @@ const StaffHome = () => {
       skip: !isAcademic,
     },
     {
-      step: isAcademic ? '5' : '4', label: 'Promotion Review (A&PC)', date: 'End of session',
+      step: isAcademic ? '5' : '4', label: 'Promotion Review (A&PC) — Final Decision', date: 'End of session',
       done: ['apc_recommended', 'pending_council', 'council_decided', 'completed'].includes(status),
       active: isAcademic ? status === 'college_board_reviewed' : ASSESSED_STATUSES.includes(status) && !['apc_recommended', 'pending_council', 'council_decided', 'completed'].includes(status),
-    },
-    {
-      step: isAcademic ? '6' : '5', label: 'Council Decision', date: 'Final approval',
-      done: ['council_decided', 'completed'].includes(status),
-      active: ['apc_recommended', 'pending_council'].includes(status),
     },
   ];
 

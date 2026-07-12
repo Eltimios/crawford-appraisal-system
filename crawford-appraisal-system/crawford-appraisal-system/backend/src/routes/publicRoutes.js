@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { supabase } = require('../config/supabase');
+const { db } = require('../config/db');
 
 // GET /api/public/assessor/:id
 // No authentication — the assessor UUID acts as the access token.
@@ -8,36 +8,33 @@ router.get('/assessor/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data: assessor, error: aErr } = await supabase
-      .from('external_assessors')
-      .select('id, name, email, institution, assessor_type, scope, stage, outcome, report_date, report_notes, report_grades, appraisal_id')
-      .eq('id', id)
-      .single();
+    const assessor = await db('external_assessors')
+      .select('id', 'name', 'email', 'institution', 'assessor_type', 'scope', 'stage', 'outcome', 'report_date', 'report_notes', 'report_grades', 'appraisal_id')
+      .where({ id }).first();
 
-    if (aErr || !assessor) {
+    if (!assessor) {
       return res.status(404).json({ error: 'Portal link not found. Please contact the Dean\'s office.' });
     }
 
-    const { data: appraisal, error: apErr } = await supabase
-      .from('appraisals')
-      .select(`
-        id, appraisal_year,
-        users!appraisals_staff_id_fkey(id, full_name, staff_id, department, college, current_rank)
-      `)
-      .eq('id', assessor.appraisal_id)
-      .single();
+    const appraisalRow = await db('appraisals')
+      .select(
+        'appraisals.id', 'appraisals.appraisal_year',
+        'u.id as u_id', 'u.full_name as u_full_name', 'u.staff_id as u_staff_id',
+        'u.department as u_department', 'u.college as u_college', 'u.current_rank as u_current_rank'
+      )
+      .leftJoin('users as u', 'appraisals.staff_id', 'u.id')
+      .where('appraisals.id', assessor.appraisal_id).first();
 
-    if (apErr || !appraisal) {
+    if (!appraisalRow) {
       return res.status(404).json({ error: 'Candidate data not found.' });
     }
 
-    const staffId = appraisal.users?.id;
+    const staffId = appraisalRow.u_id;
 
-    const { data: publications } = await supabase
-      .from('publications')
-      .select('id, title, journal_name, year_of_publication, publisher, isbn_issn, file_url, publication_type')
-      .eq('staff_id', staffId)
-      .order('year_of_publication', { ascending: false });
+    const publications = await db('publications')
+      .select('id', 'title', 'journal_name', 'year_of_publication', 'publisher', 'isbn_issn', 'file_url', 'publication_type')
+      .where({ staff_id: staffId })
+      .orderBy('year_of_publication', 'desc');
 
     res.json({
       assessor: {
@@ -53,12 +50,12 @@ router.get('/assessor/:id', async (req, res) => {
         report_grades: assessor.report_grades || null,
       },
       candidate: {
-        full_name: appraisal.users?.full_name,
-        staff_id: appraisal.users?.staff_id,
-        department: appraisal.users?.department,
-        college: appraisal.users?.college,
-        current_rank: appraisal.users?.current_rank,
-        appraisal_year: appraisal.appraisal_year,
+        full_name: appraisalRow.u_full_name,
+        staff_id: appraisalRow.u_staff_id,
+        department: appraisalRow.u_department,
+        college: appraisalRow.u_college,
+        current_rank: appraisalRow.u_current_rank,
+        appraisal_year: appraisalRow.appraisal_year,
       },
       publications: publications || [],
     });
@@ -79,13 +76,9 @@ router.post('/assessor/:id/submit', async (req, res) => {
       return res.status(400).json({ error: 'Outcome must be positive or negative.' });
     }
 
-    const { data: assessor, error: aErr } = await supabase
-      .from('external_assessors')
-      .select('id, outcome')
-      .eq('id', id)
-      .single();
+    const assessor = await db('external_assessors').select('id', 'outcome').where({ id }).first();
 
-    if (aErr || !assessor) {
+    if (!assessor) {
       return res.status(404).json({ error: 'Portal link not found.' });
     }
 
@@ -93,19 +86,15 @@ router.post('/assessor/:id/submit', async (req, res) => {
       return res.status(400).json({ error: 'A report has already been submitted for this assessment.' });
     }
 
-    const { data, error } = await supabase
-      .from('external_assessors')
+    const [data] = await db('external_assessors')
+      .where({ id })
       .update({
         outcome,
         report_date: report_date || null,
         report_notes: report_notes || null,
         report_grades: report_grades || null,
       })
-      .eq('id', id)
-      .select('id, outcome, report_date, report_notes, report_grades')
-      .single();
-
-    if (error) throw error;
+      .returning(['id', 'outcome', 'report_date', 'report_notes', 'report_grades']);
 
     res.json({
       message: 'Report submitted successfully. Thank you for your assessment.',

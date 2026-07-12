@@ -1,4 +1,5 @@
-const { supabase } = require('../config/supabase');
+const { v4: uuidv4 } = require('uuid');
+const { db } = require('../config/db');
 
 const ELIGIBLE_STATUSES = [
   'hod_assessed', 'reporting_officer_assessed',
@@ -14,6 +15,27 @@ const ROLE_CATEGORY_LOCK = {
   apc_senior:   { category: 'non-teaching', type: 'senior' },
 };
 
+// Shared join for appraisals + their staff user — replicates the
+// `users!appraisals_staff_id_fkey(...)` embed.
+const withStaffUser = (query) =>
+  query
+    .select(
+      'appraisals.*',
+      'u.full_name as u_full_name', 'u.staff_id as u_staff_id', 'u.department as u_department',
+      'u.college as u_college', 'u.current_rank as u_current_rank', 'u.staff_category as u_staff_category',
+      'u.date_of_last_promotion as u_date_of_last_promotion', 'u.date_of_first_appointment as u_date_of_first_appointment'
+    )
+    .leftJoin('users as u', 'appraisals.staff_id', 'u.id');
+
+const reshapeUser = ({ u_full_name, u_staff_id, u_department, u_college, u_current_rank, u_staff_category, u_date_of_last_promotion, u_date_of_first_appointment, ...appraisal }) => ({
+  ...appraisal,
+  users: {
+    full_name: u_full_name, staff_id: u_staff_id, department: u_department, college: u_college,
+    current_rank: u_current_rank, staff_category: u_staff_category,
+    date_of_last_promotion: u_date_of_last_promotion, date_of_first_appointment: u_date_of_first_appointment,
+  },
+});
+
 // GET /api/promotions/eligible
 const getEligibleAppraisals = async (req, res) => {
   try {
@@ -25,24 +47,14 @@ const getEligibleAppraisals = async (req, res) => {
     const lock = ROLE_CATEGORY_LOCK[req.user?.role];
     if (lock) { category = lock.category; type = lock.type; }
 
-    let query = supabase.from('appraisals')
-      .select(`
-        *,
-        users!appraisals_staff_id_fkey(
-          full_name, staff_id, department, college,
-          current_rank, staff_category,
-          date_of_last_promotion, date_of_first_appointment
-        )
-      `)
-      .in('status', ELIGIBLE_STATUSES)
-      .is('apc_decision', null);
+    let query = withStaffUser(db('appraisals'))
+      .whereIn('appraisals.status', ELIGIBLE_STATUSES)
+      .whereNull('appraisals.apc_decision');
 
-    if (appraisal_year) query = query.eq('appraisal_year', appraisal_year);
+    if (appraisal_year) query = query.andWhere('appraisals.appraisal_year', appraisal_year);
 
-    const { data, error } = await query.order('hod_assessed_at', { ascending: true });
-    if (error) throw error;
-
-    let filtered = data || [];
+    const rows = await query.orderBy('appraisals.hod_assessed_at', 'asc');
+    let filtered = rows.map(reshapeUser);
 
     // Category filter
     if (category === 'teaching') {
@@ -80,21 +92,12 @@ const getDecidedAppraisals = async (req, res) => {
     const lock = ROLE_CATEGORY_LOCK[req.user?.role];
     if (lock) { category = lock.category; type = lock.type; }
 
-    let query = supabase.from('appraisals')
-      .select(`
-        *,
-        users!appraisals_staff_id_fkey(
-          full_name, staff_id, department, current_rank, staff_category
-        )
-      `)
-      .not('apc_decision', 'is', null);
+    let query = withStaffUser(db('appraisals')).whereNotNull('appraisals.apc_decision');
 
-    if (appraisal_year) query = query.eq('appraisal_year', appraisal_year);
+    if (appraisal_year) query = query.andWhere('appraisals.appraisal_year', appraisal_year);
 
-    const { data, error } = await query.order('created_at', { ascending: false });
-    if (error) throw error;
-
-    let filtered = data || [];
+    const rows = await query.orderBy('appraisals.created_at', 'desc');
+    let filtered = rows.map(reshapeUser);
 
     if (recommendation) {
       filtered = filtered.filter(d => d.apc_decision?.decision === recommendation);
@@ -128,10 +131,10 @@ const recordRecommendation = async (req, res) => {
       return res.status(400).json({ error: `Decision must be one of: ${validDecisions.join(', ')}` });
     }
 
-    const { data: appraisal } = await supabase.from('appraisals').select('staff_id').eq('id', id).single();
+    const appraisal = await db('appraisals').select('staff_id').where({ id }).first();
     if (!appraisal) return res.status(404).json({ error: 'Appraisal not found.' });
 
-    const { data, error } = await supabase.from('appraisals').update({
+    const [data] = await db('appraisals').where({ id }).update({
       apc_decision: {
         decision,
         notes,
@@ -140,32 +143,33 @@ const recordRecommendation = async (req, res) => {
         decided_at: new Date().toISOString(),
       },
       status: 'apc_recommended',
-    }).eq('id', id).select().single();
-    if (error) throw error;
+    }).returning('*');
 
     const decisionMessages = {
-      promoted: 'The A&PC has recommended you for promotion. Pending Council approval.',
-      increment: 'The A&PC has recommended you for a salary increment. Pending Council approval.',
-      both: 'The A&PC has recommended you for promotion and salary increment. Pending Council approval.',
+      promoted: 'The A&PC has recommended you for promotion. This is the final decision for this appraisal cycle.',
+      increment: 'The A&PC has recommended you for a salary increment. This is the final decision for this appraisal cycle.',
+      both: 'The A&PC has recommended you for promotion and salary increment. This is the final decision for this appraisal cycle.',
       deferred: 'Your promotion application has been deferred. Please see notes for details.',
       not_eligible: 'Your promotion application has not been approved at this time.',
     };
 
-    await supabase.from('notifications').insert({
+    await db('notifications').insert({
+      id: uuidv4(),
       user_id: appraisal.staff_id,
       type: 'promotion_decision',
       title: 'A&PC Recommendation',
       message: decisionMessages[decision],
     });
 
-    await supabase.from('audit_logs').insert({
+    await db('audit_logs').insert({
+      id: uuidv4(),
       user_id: req.user.id,
       action: `APC_RECOMMEND_${decision.toUpperCase()}`,
       entity_type: 'appraisals',
       entity_id: id,
     });
 
-    res.json({ message: 'Recommendation recorded. Pending Council approval.', appraisal: data });
+    res.json({ message: 'Recommendation recorded. This is the final decision for this appraisal cycle.', appraisal: data });
   } catch (err) {
     console.error('Record recommendation error:', err);
     res.status(500).json({ error: 'Failed to record recommendation.' });

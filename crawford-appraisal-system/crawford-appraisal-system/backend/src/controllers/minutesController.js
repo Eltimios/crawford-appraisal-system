@@ -1,5 +1,8 @@
-const { supabase } = require('../config/supabase');
+const { v4: uuidv4 } = require('uuid');
+const jwt = require('jsonwebtoken');
 const pdfParse = require('pdf-parse');
+const { db } = require('../config/db');
+const { savePrivateFile, getPrivateFilePath } = require('../config/storage');
 const {
   Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
   AlignmentType, WidthType, BorderStyle, HeadingLevel, ShadingType,
@@ -91,20 +94,20 @@ async function correlateWithDB(entries, meetingType, appraisalYear) {
   const discrepancies = [];
   if (!entries.length) return discrepancies;
 
-  const { data: appraisals } = await supabase
-    .from('appraisals')
-    .select(`
-      id, appraisal_year,
-      hod_grades, college_board_recommendation,
-      apc_decision, council_decision,
-      users!appraisals_staff_id_fkey(full_name, staff_id)
-    `)
-    .eq('appraisal_year', appraisalYear);
+  const rows = await db('appraisals')
+    .select(
+      'appraisals.id', 'appraisals.appraisal_year',
+      'appraisals.hod_grades', 'appraisals.college_board_recommendation',
+      'appraisals.apc_decision', 'appraisals.council_decision',
+      'u.full_name as u_full_name', 'u.staff_id as u_staff_id'
+    )
+    .leftJoin('users as u', 'appraisals.staff_id', 'u.id')
+    .where('appraisals.appraisal_year', appraisalYear);
 
   const byStaffId = {};
-  for (const a of (appraisals || [])) {
-    if (a.users?.staff_id) {
-      byStaffId[a.users.staff_id.toUpperCase()] = a;
+  for (const a of rows) {
+    if (a.u_staff_id) {
+      byStaffId[a.u_staff_id.toUpperCase()] = a;
     }
   }
 
@@ -251,22 +254,20 @@ const uploadMinutes = async (req, res) => {
       console.warn('pdf-parse warning:', err.message);
     }
 
-    // Upload to Supabase Storage
+    // Save to local disk (private — served only via the token-gated download route)
     const ts = Date.now();
     const safeFilename = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
     const storagePath = `${meeting_type}/${year}/${ts}_${safeFilename}`;
 
-    const { error: storageErr } = await supabase.storage
-      .from('meeting-minutes')
-      .upload(storagePath, buffer, { contentType: 'application/pdf', upsert: false });
-
-    if (storageErr) {
-      return res.status(500).json({ error: 'Storage upload failed: ' + storageErr.message });
+    try {
+      savePrivateFile('meeting-minutes', storagePath, buffer);
+    } catch (err) {
+      return res.status(500).json({ error: 'Storage upload failed: ' + err.message });
     }
 
-    const { data: record, error: dbErr } = await supabase
-      .from('meeting_minutes')
+    const [record] = await db('meeting_minutes')
       .insert({
+        id: uuidv4(),
         meeting_type,
         appraisal_year: year,
         meeting_date,
@@ -279,12 +280,7 @@ const uploadMinutes = async (req, res) => {
         discrepancies,
         notes: notes || null,
       })
-      .select()
-      .single();
-
-    if (dbErr) {
-      return res.status(500).json({ error: 'Database save failed: ' + dbErr.message });
-    }
+      .returning('*');
 
     res.status(201).json({
       message: 'Minutes uploaded successfully.',
@@ -316,26 +312,28 @@ const getMinutes = async (req, res) => {
 
     if (!allowedTypes.length) return res.json({ minutes: [] });
 
-    let query = supabase
-      .from('meeting_minutes')
-      .select(`
-        id, meeting_type, appraisal_year, meeting_date, meeting_number,
-        pdf_filename, pdf_size, status, notes, created_at,
-        extracted_entries, discrepancies,
-        users!meeting_minutes_uploaded_by_fkey(full_name, role)
-      `)
-      .in('meeting_type', allowedTypes)
-      .order('meeting_date', { ascending: false });
+    let query = db('meeting_minutes')
+      .select(
+        'meeting_minutes.id', 'meeting_minutes.meeting_type', 'meeting_minutes.appraisal_year',
+        'meeting_minutes.meeting_date', 'meeting_minutes.meeting_number',
+        'meeting_minutes.pdf_filename', 'meeting_minutes.pdf_size', 'meeting_minutes.status',
+        'meeting_minutes.notes', 'meeting_minutes.created_at',
+        'meeting_minutes.extracted_entries', 'meeting_minutes.discrepancies',
+        'u.full_name as u_full_name', 'u.role as u_role'
+      )
+      .leftJoin('users as u', 'meeting_minutes.uploaded_by', 'u.id')
+      .whereIn('meeting_minutes.meeting_type', allowedTypes)
+      .orderBy('meeting_minutes.meeting_date', 'desc');
 
     if (meeting_type && allowedTypes.includes(meeting_type)) {
-      query = query.eq('meeting_type', meeting_type);
+      query = query.andWhere('meeting_minutes.meeting_type', meeting_type);
     }
     if (appraisal_year) {
-      query = query.eq('appraisal_year', parseInt(appraisal_year, 10));
+      query = query.andWhere('meeting_minutes.appraisal_year', parseInt(appraisal_year, 10));
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
+    const rows = await query;
+    const data = rows.map(({ u_full_name, u_role, ...m }) => ({ ...m, users: { full_name: u_full_name, role: u_role } }));
 
     res.json({ minutes: data || [] });
   } catch (err) {
@@ -347,41 +345,66 @@ const getMinutes = async (req, res) => {
 // GET /api/minutes/:id
 const getMinutesById = async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('meeting_minutes')
-      .select(`*, users!meeting_minutes_uploaded_by_fkey(full_name, role, email)`)
-      .eq('id', req.params.id)
-      .single();
+    const row = await db('meeting_minutes')
+      .select('meeting_minutes.*', 'u.full_name as u_full_name', 'u.role as u_role', 'u.email as u_email')
+      .leftJoin('users as u', 'meeting_minutes.uploaded_by', 'u.id')
+      .where('meeting_minutes.id', req.params.id).first();
 
-    if (error || !data) return res.status(404).json({ error: 'Minutes not found.' });
-    res.json({ minutes: data });
+    if (!row) return res.status(404).json({ error: 'Minutes not found.' });
+    const { u_full_name, u_role, u_email, ...minutes } = row;
+    res.json({ minutes: { ...minutes, users: { full_name: u_full_name, role: u_role, email: u_email } } });
   } catch (err) {
     console.error('getMinutesById error:', err);
     res.status(500).json({ error: 'Failed to fetch minutes.' });
   }
 };
 
-// GET /api/minutes/:id/download-url
+// GET /api/minutes/:id/download-url — issues a short-lived signed download link
+// (replicates Supabase Storage's createSignedUrl, since files now live on local disk)
 const getMinutesPdfUrl = async (req, res) => {
   try {
-    const { data: record, error: dbErr } = await supabase
-      .from('meeting_minutes')
-      .select('pdf_url')
-      .eq('id', req.params.id)
-      .single();
+    const record = await db('meeting_minutes').select('id').where({ id: req.params.id }).first();
+    if (!record) return res.status(404).json({ error: 'Minutes not found.' });
 
-    if (dbErr || !record) return res.status(404).json({ error: 'Minutes not found.' });
+    const token = jwt.sign(
+      { minutesId: req.params.id, purpose: 'minutes_download' },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
 
-    const { data, error } = await supabase.storage
-      .from('meeting-minutes')
-      .createSignedUrl(record.pdf_url, 3600);
-
-    if (error) return res.status(500).json({ error: 'Failed to generate download URL.' });
-
-    res.json({ url: data.signedUrl });
+    const url = `${req.protocol}://${req.get('host')}/api/minutes-download/${req.params.id}?token=${token}`;
+    res.json({ url });
   } catch (err) {
     console.error('getMinutesPdfUrl error:', err);
     res.status(500).json({ error: 'Failed to get PDF URL.' });
+  }
+};
+
+// GET /api/minutes-download/:id?token=... — unauthenticated (token IS the credential,
+// same trust model as a Supabase signed URL), so this must not sit behind `authenticate`.
+const downloadMinutesPdf = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { token } = req.query;
+    if (!token) return res.status(401).json({ error: 'Missing download token.' });
+
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: 'Invalid or expired download link.' });
+    }
+    if (payload.purpose !== 'minutes_download' || payload.minutesId !== id) {
+      return res.status(401).json({ error: 'Invalid download token.' });
+    }
+
+    const record = await db('meeting_minutes').select('pdf_url', 'pdf_filename').where({ id }).first();
+    if (!record) return res.status(404).json({ error: 'Minutes not found.' });
+
+    res.download(getPrivateFilePath('meeting-minutes', record.pdf_url), record.pdf_filename);
+  } catch (err) {
+    console.error('downloadMinutesPdf error:', err);
+    res.status(500).json({ error: 'Failed to download minutes.' });
   }
 };
 
@@ -674,4 +697,4 @@ const generateTemplate = async (req, res) => {
   }
 };
 
-module.exports = { uploadMinutes, getMinutes, getMinutesById, getMinutesPdfUrl, generateTemplate };
+module.exports = { uploadMinutes, getMinutes, getMinutesById, getMinutesPdfUrl, downloadMinutesPdf, generateTemplate };

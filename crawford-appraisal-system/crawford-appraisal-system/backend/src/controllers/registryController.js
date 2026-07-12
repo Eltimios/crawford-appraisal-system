@@ -1,39 +1,42 @@
-const { supabase } = require('../config/supabase');
+const { v4: uuidv4 } = require('uuid');
+const { db } = require('../config/db');
 
 const logAudit = async (userId, action, entityType, entityId) => {
   try {
-    await supabase.from('audit_logs').insert({ user_id: userId, action, entity_type: entityType, entity_id: entityId });
+    await db('audit_logs').insert({ id: uuidv4(), user_id: userId, action, entity_type: entityType, entity_id: entityId });
   } catch (err) { console.error('Audit log error:', err); }
 };
 
 const notifyUser = async (userId, type, title, message, appraisalId) => {
   try {
-    await supabase.from('notifications').insert({ user_id: userId, type, title, message, related_appraisal_id: appraisalId });
+    await db('notifications').insert({ id: uuidv4(), user_id: userId, type, title, message, related_appraisal_id: appraisalId });
   } catch (err) { console.error('Notify error:', err); }
+};
+
+// Joins appraisals + staff user, reshaping flat columns back into a nested `users` object.
+const withStaffUser = (query, userCols) => {
+  const selects = ['appraisals.*', ...userCols.map(c => `u.${c} as u_${c}`)];
+  return query.select(...selects).leftJoin('users as u', 'appraisals.staff_id', 'u.id');
+};
+const reshape = (row, userCols) => {
+  const users = {};
+  const appraisal = { ...row };
+  for (const c of userCols) { users[c] = appraisal[`u_${c}`]; delete appraisal[`u_${c}`]; }
+  return { ...appraisal, users };
 };
 
 // GET /api/registry/stats
 const getRegistryStats = async (req, res) => {
   try {
-    const [
-      { data: pendingValidation },
-      { data: pendingDisputes },
-      { data: validated },
-    ] = await Promise.all([
-      supabase.from('appraisals')
-        .select('id, users!appraisals_staff_id_fkey(staff_category)')
-        .eq('status', 'reporting_officer_assessed'),
-      supabase.from('appraisals')
-        .select('id, users!appraisals_staff_id_fkey(staff_category)')
-        .eq('status', 'dispute_raised'),
-      supabase.from('appraisals')
-        .select('id')
-        .eq('registry_validated', true),
+    const [pendingValidation, pendingDisputes, validated] = await Promise.all([
+      withStaffUser(db('appraisals'), ['staff_category']).where('appraisals.status', 'reporting_officer_assessed'),
+      withStaffUser(db('appraisals'), ['staff_category']).where('appraisals.status', 'dispute_raised'),
+      db('appraisals').select('id').where('registry_validated', true),
     ]);
 
     // Filter to non-teaching only
-    const pendingCount = (pendingValidation || []).filter(a => a.users?.staff_category !== 'academic').length;
-    const disputeCount = (pendingDisputes || []).filter(a => a.users?.staff_category !== 'academic').length;
+    const pendingCount = (pendingValidation || []).filter(a => a.u_staff_category !== 'academic').length;
+    const disputeCount = (pendingDisputes || []).filter(a => a.u_staff_category !== 'academic').length;
     const validatedCount = validated?.length || 0;
 
     res.json({
@@ -50,15 +53,14 @@ const getRegistryStats = async (req, res) => {
 // GET /api/registry/pending-validation
 const getPendingValidation = async (req, res) => {
   try {
-    const { data, error } = await supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_id, department, staff_category, current_rank)')
-      .eq('status', 'reporting_officer_assessed')
-      .eq('registry_validated', false)
-      .order('hod_assessed_at', { ascending: true });
-    if (error) throw error;
+    const userCols = ['full_name', 'staff_id', 'department', 'staff_category', 'current_rank'];
+    const rows = await withStaffUser(db('appraisals'), userCols)
+      .where({ 'appraisals.status': 'reporting_officer_assessed', 'appraisals.registry_validated': false })
+      .orderBy('appraisals.hod_assessed_at', 'asc');
 
+    const data = rows.map(r => reshape(r, userCols));
     // Registry only validates non-teaching staff
-    const filtered = (data || []).filter(a => a.users?.staff_category !== 'academic');
+    const filtered = data.filter(a => a.users?.staff_category !== 'academic');
     res.json({ appraisals: filtered });
   } catch (err) {
     console.error('Get pending validation error:', err);
@@ -76,10 +78,10 @@ const validateAssessment = async (req, res) => {
       return res.status(400).json({ error: 'Registry summary assessment is required.' });
     }
 
-    const { data: appraisal } = await supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_category)')
-      .eq('id', appraisalId).single();
-    if (!appraisal) return res.status(404).json({ error: 'Appraisal not found.' });
+    const userCols = ['full_name', 'staff_category'];
+    const row = await withStaffUser(db('appraisals'), userCols).where('appraisals.id', appraisalId).first();
+    if (!row) return res.status(404).json({ error: 'Appraisal not found.' });
+    const appraisal = reshape(row, userCols);
 
     if (appraisal.users?.staff_category === 'academic') {
       return res.status(400).json({ error: 'Registry only validates non-teaching staff appraisals.' });
@@ -88,7 +90,7 @@ const validateAssessment = async (req, res) => {
       return res.status(400).json({ error: 'This appraisal is not pending Registry validation.' });
     }
 
-    const { data, error } = await supabase.from('appraisals').update({
+    const [data] = await db('appraisals').where({ id: appraisalId }).update({
       registry_validated: true,
       registry_validated_by: req.user.id,
       registry_validated_at: new Date().toISOString(),
@@ -96,8 +98,7 @@ const validateAssessment = async (req, res) => {
       registry_summary,
       registry_recommended_action: registry_recommended_action || null,
       status: 'registry_validated',
-    }).eq('id', appraisalId).select().single();
-    if (error) throw error;
+    }).returning('*');
 
     await notifyUser(appraisal.staff_id, 'hod_assessment_complete', 'Assessment Ready for Review',
       'Your appraisal assessment has been validated and is now available for you to view.', appraisalId);
@@ -113,13 +114,13 @@ const validateAssessment = async (req, res) => {
 // GET /api/registry/disputes
 const getNonTeachingDisputes = async (req, res) => {
   try {
-    const { data, error } = await supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_id, department, staff_category, current_rank)')
-      .in('status', ['dispute_raised', 'disputed'])
-      .order('staff_action_at', { ascending: true });
-    if (error) throw error;
+    const userCols = ['full_name', 'staff_id', 'department', 'staff_category', 'current_rank'];
+    const rows = await withStaffUser(db('appraisals'), userCols)
+      .whereIn('appraisals.status', ['dispute_raised', 'disputed'])
+      .orderBy('appraisals.staff_action_at', 'asc');
 
-    const filtered = (data || []).filter(a => a.users?.staff_category !== 'academic');
+    const data = rows.map(r => reshape(r, userCols));
+    const filtered = data.filter(a => a.users?.staff_category !== 'academic');
     res.json({ disputes: filtered });
   } catch (err) {
     console.error('Get non-teaching disputes error:', err);
@@ -134,10 +135,10 @@ const resolveNonTeachingDispute = async (req, res) => {
     const { resolution } = req.body;
     if (!resolution) return res.status(400).json({ error: 'Resolution comment is required.' });
 
-    const { data: appraisal } = await supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_category)')
-      .eq('id', appraisalId).single();
-    if (!appraisal) return res.status(404).json({ error: 'Appraisal not found.' });
+    const userCols = ['full_name', 'staff_category'];
+    const row = await withStaffUser(db('appraisals'), userCols).where('appraisals.id', appraisalId).first();
+    if (!row) return res.status(404).json({ error: 'Appraisal not found.' });
+    const appraisal = reshape(row, userCols);
 
     if (appraisal.users?.staff_category === 'academic') {
       return res.status(400).json({ error: 'Academic staff disputes are resolved by the Dean.' });
@@ -146,13 +147,12 @@ const resolveNonTeachingDispute = async (req, res) => {
       return res.status(400).json({ error: 'No active dispute on this appraisal.' });
     }
 
-    const { data, error } = await supabase.from('appraisals').update({
+    const [data] = await db('appraisals').where({ id: appraisalId }).update({
       dean_id: req.user.id,
       dean_resolution: resolution,
       dean_resolved_at: new Date().toISOString(),
       status: 'dean_resolved',
-    }).eq('id', appraisalId).select().single();
-    if (error) throw error;
+    }).returning('*');
 
     await notifyUser(appraisal.staff_id, 'dispute_resolved', 'Dispute Resolved',
       'Registry has reviewed and resolved your appraisal dispute.', appraisalId);
@@ -168,15 +168,12 @@ const resolveNonTeachingDispute = async (req, res) => {
 const getReportingOfficerAppraisals = async (req, res) => {
   try {
     const { year } = req.query;
-    let query = supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(id, full_name, staff_id, department, current_rank, role)')
-      .eq('users.role', 'reporting_officer')
-      .order('created_at', { ascending: false });
-    if (year) query = query.eq('appraisal_year', year);
-    const { data, error } = await query;
-    if (error) throw error;
-    const filtered = (data || []).filter(a => a.users?.role === 'reporting_officer');
-    res.json({ appraisals: filtered });
+    const userCols = ['id', 'full_name', 'staff_id', 'department', 'current_rank', 'role'];
+    let query = withStaffUser(db('appraisals'), userCols).andWhere('u.role', 'reporting_officer');
+    if (year) query = query.andWhere('appraisals.appraisal_year', year);
+    const rows = await query.orderBy('appraisals.created_at', 'desc');
+    const data = rows.map(r => reshape(r, userCols));
+    res.json({ appraisals: data });
   } catch (err) {
     console.error('Get RO appraisals error:', err);
     res.status(500).json({ error: 'Failed to fetch Reporting Officer appraisals.' });
@@ -192,24 +189,24 @@ const assessReportingOfficer = async (req, res) => {
       return res.status(400).json({ error: 'Overall grade and recommendation are required.' });
     }
 
-    const { data: appraisal } = await supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, role)')
-      .eq('id', appraisalId).single();
-    if (!appraisal) return res.status(404).json({ error: 'Appraisal not found.' });
+    const userCols = ['full_name', 'role'];
+    const row = await withStaffUser(db('appraisals'), userCols).where('appraisals.id', appraisalId).first();
+    if (!row) return res.status(404).json({ error: 'Appraisal not found.' });
+    const appraisal = reshape(row, userCols);
+
     if (appraisal.users?.role !== 'reporting_officer') {
       return res.status(400).json({ error: 'This appraisal does not belong to a Reporting Officer.' });
     }
 
     const assessment = { grades, overallGrade, recommendation, assessedAt: new Date().toISOString() };
 
-    const { data, error } = await supabase.from('appraisals').update({
+    const [data] = await db('appraisals').where({ id: appraisalId }).update({
       hod_grades: assessment,
       hod_recommendation: recommendation,
       hod_assessed_at: new Date().toISOString(),
       hod_id: req.user.id,
       status: 'registry_assessed',
-    }).eq('id', appraisalId).select().single();
-    if (error) throw error;
+    }).returning('*');
 
     await notifyUser(appraisal.staff_id, 'hod_assessment_complete', 'Your Appraisal Has Been Assessed',
       'Registry has completed your appraisal assessment.', appraisalId);
@@ -229,13 +226,12 @@ const getAssessedAppraisals = async (req, res) => {
       'reporting_officer_assessed', 'registry_validated',
       'staff_viewed', 'dispute_raised', 'disputed', 'dean_resolved', 'completed',
     ];
-    let q = supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_id, department, staff_category, current_rank)')
-      .in('status', assessedStatuses);
-    if (year) q = q.eq('appraisal_year', year);
-    const { data, error } = await q.order('created_at', { ascending: false });
-    if (error) throw error;
-    const filtered = (data || []).filter(a => a.users?.staff_category !== 'academic');
+    const userCols = ['full_name', 'staff_id', 'department', 'staff_category', 'current_rank'];
+    let q = withStaffUser(db('appraisals'), userCols).whereIn('appraisals.status', assessedStatuses);
+    if (year) q = q.andWhere('appraisals.appraisal_year', year);
+    const rows = await q.orderBy('appraisals.created_at', 'desc');
+    const data = rows.map(r => reshape(r, userCols));
+    const filtered = data.filter(a => a.users?.staff_category !== 'academic');
     res.json({ appraisals: filtered });
   } catch (err) {
     console.error('Get assessed appraisals error:', err);
@@ -250,20 +246,20 @@ const saveRegistryRecommendation = async (req, res) => {
     const { registry_summary, registry_recommended_action, registry_remarks } = req.body;
     if (!registry_summary) return res.status(400).json({ error: 'Summary of assessment is required.' });
 
-    const { data: appraisal } = await supabase.from('appraisals')
-      .select('id, status, users!appraisals_staff_id_fkey(staff_category)')
-      .eq('id', appraisalId).single();
-    if (!appraisal) return res.status(404).json({ error: 'Appraisal not found.' });
+    const userCols = ['staff_category'];
+    const row = await withStaffUser(db('appraisals').select('appraisals.id', 'appraisals.status'), userCols)
+      .where('appraisals.id', appraisalId).first();
+    if (!row) return res.status(404).json({ error: 'Appraisal not found.' });
+    const appraisal = reshape(row, userCols);
     if (appraisal.users?.staff_category === 'academic') {
       return res.status(400).json({ error: 'Registry only recommends for non-teaching staff.' });
     }
 
-    const { data, error } = await supabase.from('appraisals').update({
+    const [data] = await db('appraisals').where({ id: appraisalId }).update({
       registry_summary,
       registry_recommended_action: registry_recommended_action || null,
       registry_remarks: registry_remarks || null,
-    }).eq('id', appraisalId).select().single();
-    if (error) throw error;
+    }).returning('*');
 
     await logAudit(req.user.id, 'REGISTRY_RECOMMENDATION_SAVED', 'appraisals', appraisalId);
     res.json({ message: 'Recommendation saved successfully.', appraisal: data });
@@ -279,22 +275,20 @@ const getRegistryOverview = async (req, res) => {
     const { year } = req.query;
 
     // All active non-teaching staff
-    const { data: staffList } = await supabase.from('users')
-      .select('id, full_name, staff_id, department, staff_category, current_rank, is_active')
-      .in('staff_category', ['junior_nonteaching', 'senior_nonteaching'])
-      .eq('is_active', true);
+    const staffList = await db('users')
+      .select('id', 'full_name', 'staff_id', 'department', 'staff_category', 'current_rank', 'is_active')
+      .whereIn('staff_category', ['junior_nonteaching', 'senior_nonteaching'])
+      .andWhere('is_active', true);
 
-    const staffIds = (staffList || []).map(s => s.id);
+    const staffIds = staffList.map(s => s.id);
     if (staffIds.length === 0) return res.json({ totals: {}, departments: [], appraisals: [] });
 
-    let q = supabase.from('appraisals')
-      .select('*, users!appraisals_staff_id_fkey(full_name, staff_id, department, staff_category, current_rank)')
-      .in('staff_id', staffIds);
-    if (year) q = q.eq('appraisal_year', year);
-    const { data: appraisals, error } = await q.order('created_at', { ascending: false });
-    if (error) throw error;
+    const userCols = ['full_name', 'staff_id', 'department', 'staff_category', 'current_rank'];
+    let q = withStaffUser(db('appraisals'), userCols).whereIn('appraisals.staff_id', staffIds);
+    if (year) q = q.andWhere('appraisals.appraisal_year', year);
+    const rows = await q.orderBy('appraisals.created_at', 'desc');
+    const list = rows.map(r => reshape(r, userCols));
 
-    const list = appraisals || [];
     const totalStaff = staffList.length;
     const submitted = list.filter(a => a.status !== 'draft').length;
     const assessed  = list.filter(a => ['reporting_officer_assessed','registry_validated','staff_viewed','dispute_raised','disputed','dean_resolved','completed'].includes(a.status)).length;
@@ -303,7 +297,7 @@ const getRegistryOverview = async (req, res) => {
 
     // Department breakdown — seed from staff list so depts with 0 submissions still appear
     const deptMap = {};
-    (staffList || []).forEach(s => {
+    staffList.forEach(s => {
       const d = s.department || 'Unknown';
       if (!deptMap[d]) deptMap[d] = { name: d, staff: 0, submitted: 0, assessed: 0, validated: 0, disputed: 0 };
       deptMap[d].staff += 1;
