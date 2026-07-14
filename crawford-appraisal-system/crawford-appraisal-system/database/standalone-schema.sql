@@ -271,6 +271,8 @@ CREATE TABLE external_assessors (
   vc_selected_at timestamp with time zone NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   report_grades jsonb NULL,
+  report_file_url text NULL,
+  report_file_name text NULL,
   CONSTRAINT external_assessors_pkey PRIMARY KEY (id),
   CONSTRAINT external_assessors_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES users (id),
   CONSTRAINT external_assessors_vc_selected_by_fkey FOREIGN KEY (vc_selected_by) REFERENCES users (id),

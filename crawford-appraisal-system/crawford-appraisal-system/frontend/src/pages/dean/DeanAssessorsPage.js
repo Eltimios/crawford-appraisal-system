@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   LuUsers, LuPlus, LuTrash2, LuCheckCircle2, LuXCircle, LuClock,
   LuLoader, LuX, LuChevronDown, LuChevronUp, LuBadge, LuSearch,
-  LuGlobe, LuBuilding2, LuLink2,
+  LuGlobe, LuBuilding2, LuLink2, LuFileText, LuExternalLink,
 } from 'react-icons/lu';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
@@ -100,6 +100,22 @@ const OutcomeModal = ({ assessor, onClose, onSaved }) => {
           <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>
             Assessor: <strong style={{ color: 'var(--text-primary)' }}>{assessor.name}</strong> — {assessor.institution}
           </div>
+
+          {/* Detailed report document from portal */}
+          {assessor.report_file_url && (
+            <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', minWidth: 0 }}>
+                <LuFileText size={17} style={{ color: '#3b82f6', flexShrink: 0 }} />
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {assessor.report_file_name || 'Assessment Report.pdf'}
+                </span>
+              </div>
+              <a href={assessor.report_file_url} target="_blank" rel="noopener noreferrer"
+                style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', fontWeight: 700, color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: 6, padding: '0.25rem 0.6rem' }}>
+                <LuExternalLink size={11} /> View PDF
+              </a>
+            </div>
+          )}
 
           {/* Grades from portal */}
           {hasGrades && (
@@ -276,7 +292,6 @@ const AddAssessorModal = ({ appraisalId, stage, rank, onClose, onAdded }) => {
 // ─────────────────────── Assessor Panel (expanded row) ──────────────────────
 const AssessorPanel = ({ candidate, onClose }) => {
   const [assessors, setAssessors] = useState([]);
-  const [appraisalMeta, setAppraisalMeta] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(null); // 'initial' | 'final' | null
   const [outcomeTarget, setOutcomeTarget] = useState(null);
@@ -285,7 +300,6 @@ const AssessorPanel = ({ candidate, onClose }) => {
     try {
       const res = await api.get(`/assessors/${candidate.id}`);
       setAssessors(res.data.assessors || []);
-      setAppraisalMeta(res.data.appraisal);
     } catch {
       toast.error('Failed to load assessors.');
     } finally {
@@ -310,14 +324,9 @@ const AssessorPanel = ({ candidate, onClose }) => {
   const onSaved = (updated) => setAssessors(prev => prev.map(a => a.id === updated.id ? updated : a));
 
   const rank = candidate.users?.current_rank;
-  const isProfessorial = PROFESSORIAL_RANKS.includes(rank);
-  const pfqEstablished = appraisalMeta?.pfq_established;
-  const interviewDone  = appraisalMeta?.interview_completed;
 
   const initial = assessors.filter(a => a.stage === 'initial');
-  const final   = assessors.filter(a => a.stage === 'final');
   const positiveInitial = initial.filter(a => a.outcome === 'positive').length;
-  const positiveFinalSelected = final.filter(a => a.selected_by_vc && a.outcome === 'positive').length;
 
   const renderAssessorTable = (list, stage) => (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
@@ -353,10 +362,23 @@ const AssessorPanel = ({ candidate, onClose }) => {
               <OutcomeBadge outcome={a.outcome} />
             </td>
             <td style={{ padding: '0.6rem 0.75rem' }}>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => setOutcomeTarget(a)} title="Record outcome" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', padding: '0.25rem' }}>
-                  <LuCheckCircle2 size={15} />
-                </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                {a.outcome === 'pending' ? (
+                  <button onClick={() => setOutcomeTarget(a)} title="Record outcome" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#3b82f6', padding: '0.25rem' }}>
+                    <LuCheckCircle2 size={15} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setOutcomeTarget(a)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)',
+                      borderRadius: 6, padding: '0.3rem 0.6rem', cursor: 'pointer',
+                      color: '#3b82f6', fontWeight: 700, fontSize: '0.725rem', whiteSpace: 'nowrap',
+                    }}>
+                    <LuFileText size={13} /> View Report
+                  </button>
+                )}
                 {a.assessor_type === 'external' && (
                   <button
                     title="Copy portal link to share with assessor"
@@ -421,45 +443,9 @@ const AssessorPanel = ({ candidate, onClose }) => {
         <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>{renderAssessorTable(initial, 'initial')}</div>
       </div>
 
-      {/* ── Final Stage (professorial only) ── */}
-      {isProfessorial && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: '0.875rem', color: 'var(--text-primary)' }}>Final External Assessment</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: 2 }}>Submit 6 names to VC (2 international + 4 national). VC selects 3.</div>
-            </div>
-            {pfqEstablished && final.length < 6 && (
-              <button onClick={() => setShowAddModal('final')} className="btn btn-primary" style={{ padding: '0.4rem 0.875rem', fontSize: '0.8rem', marginLeft: 'auto' }}>
-                <LuPlus size={14} /> Add
-              </button>
-            )}
-          </div>
-
-          {!pfqEstablished && (
-            <div style={{ padding: '0.75rem 1rem', borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', fontSize: '0.8rem', color: '#b45309', marginBottom: '0.75rem' }}>
-              A&PC must establish PFQ before the final stage can begin.
-            </div>
-          )}
-
-          {pfqEstablished && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#10b981', background: 'rgba(16,185,129,0.12)', padding: '0.25rem 0.75rem', borderRadius: 20 }}>
-                  PFQ Established
-                </span>
-                {interviewDone && (
-                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6366f1', background: 'rgba(99,102,241,0.12)', padding: '0.25rem 0.75rem', borderRadius: 20 }}>
-                    Interview Completed
-                  </span>
-                )}
-              </div>
-              {final.filter(a => a.selected_by_vc).length > 0 && progressBar(positiveFinalSelected, final.filter(a => a.selected_by_vc).length, '#6366f1')}
-              <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>{renderAssessorTable(final, 'final')}</div>
-            </>
-          )}
-        </div>
-      )}
+      {/* Final-stage professorial assessment (6-assessor VC selection, PFQ) is
+          deliberately not surfaced here — that stage is confidential and handled
+          entirely on paper, outside the system. */}
 
       {showAddModal && (
         <AddAssessorModal
@@ -537,7 +523,6 @@ const DeanAssessorsPage = () => {
           {filtered.map(c => {
             const isOpen = expanded === c.id;
             const rank   = c.users?.current_rank;
-            const isPro  = PROFESSORIAL_RANKS.includes(rank);
             return (
               <div key={c.id}>
                 <div style={{ background: 'var(--bg-card)', border: `1px solid ${isOpen ? 'var(--role-accent)' : 'var(--border)'}`, borderRadius: 'var(--radius)', padding: '1rem 1.25rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', transition: 'border-color 0.2s', cursor: 'pointer' }}
@@ -551,15 +536,6 @@ const DeanAssessorsPage = () => {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '0.775rem', fontWeight: 700, padding: '0.2rem 0.6rem', borderRadius: 20, background: 'rgba(245,158,11,0.12)', color: '#d97706' }}>{rank}</span>
-                    {isPro && (
-                      <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.6rem', borderRadius: 20, background: 'rgba(99,102,241,0.12)', color: '#6366f1' }}>2-stage</span>
-                    )}
-                    {c.pfq_established && (
-                      <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.6rem', borderRadius: 20, background: 'rgba(16,185,129,0.12)', color: '#10b981' }}>PFQ ✓</span>
-                    )}
-                    {c.interview_completed && (
-                      <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.2rem 0.6rem', borderRadius: 20, background: 'rgba(99,102,241,0.12)', color: '#6366f1' }}>Interview ✓</span>
-                    )}
                   </div>
                   <div style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center' }}>
                     {isOpen ? <LuChevronUp size={18} /> : <LuChevronDown size={18} />}

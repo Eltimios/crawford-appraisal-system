@@ -6,23 +6,33 @@ import api from '../../services/api';
 import { NON_TEACHING_CADRES, CADRE_NAMES } from '../../data/nonTeachingCadres';
 
 const COLLEGES = [
-  'College of Natural Sciences',
-  'College of Social and Management Sciences',
-  'College of Engineering and Technology',
-  'College of Law',
-  'College of Humanities',
+  'College of Natural and Applied Sciences (CONAS)',
+  'College of Arts and Communication Studies (CACOS)',
+  'College of Business & Social Sciences (CBSS)',
+  'Postgraduate School',
+  'School of Postgraduate & Training Studies (SPTS)',
+  'Central Administration',
+  'Registry',
+  'Bursary',
+  'Library',
+  'Works & Services',
+  'Student Affairs',
+  'Medical Centre',
+  'ICT Services',
+  'Security',
+  'NIL',
 ];
 
 const DEPARTMENTS_BY_COLLEGE = {
-  'College of Natural Sciences': [
-    'Computer Science, ICT & Cybersecurity',
+  'College of Natural and Applied Sciences (CONAS)': [
+    'Computer Science',
     'Microbiology',
     'Industrial Chemistry',
     'Geology',
     'Biochemistry',
     'Physics',
   ],
-  'College of Social and Management Sciences': [
+  'College of Business & Social Sciences (CBSS)': [
     'Business Administration',
     'Accounting',
     'Economics',
@@ -30,18 +40,12 @@ const DEPARTMENTS_BY_COLLEGE = {
     'Sociology',
     'Political Science',
   ],
-  'College of Engineering and Technology': [
-    'Electrical & Electronics Engineering',
-    'Civil Engineering',
-    'Mechanical Engineering',
-    'Computer Engineering',
-  ],
-  'College of Law': ['Law'],
-  'College of Humanities': [
+  'College of Arts and Communication Studies (CACOS)': [
     'English & Literary Studies',
     'History & International Studies',
     'Religious Studies',
     'Philosophy',
+    'Mass Communication',
   ],
 };
 
@@ -605,7 +609,7 @@ const OtherInfoSection = ({ data, update, locked }) => (
   </div>
 );
 
-const BiodataSection = ({ data, update, locked, category }) => {
+const BiodataSection = ({ data, update, updateRow, addRow, removeRow, locked, category }) => {
   const isAcademic = category === 'academic';
   return (
     <div>

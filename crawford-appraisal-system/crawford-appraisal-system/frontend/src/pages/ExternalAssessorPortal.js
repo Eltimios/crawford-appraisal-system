@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import {
   LuCheckCircle2, LuXCircle, LuLoader, LuBookOpen,
   LuUser, LuBuilding2, LuCalendar, LuExternalLink, LuBarChart2,
+  LuFileText, LuUpload,
 } from 'react-icons/lu';
 
 const API_BASE = `${process.env.REACT_APP_BACKEND_URL || 'http://localhost:5000'}/api`;
@@ -104,9 +105,12 @@ const ExternalAssessorPortal = () => {
   const [outcome, setOutcome] = useState('');
   const [reportDate, setReportDate] = useState('');
   const [notes, setNotes] = useState('');
+  const [reportFile, setReportFile] = useState(null);
+  const [fileError, setFileError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
   const [submitted, setSubmitted] = useState(false);
+  const [submittedFile, setSubmittedFile] = useState(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/public/assessor/${assessorId}`)
@@ -120,6 +124,9 @@ const ExternalAssessorPortal = () => {
           setReportDate(d.assessor.report_date || '');
           setNotes(d.assessor.report_notes || '');
           if (d.assessor.report_grades) setGrades(d.assessor.report_grades);
+          if (d.assessor.report_file_url) {
+            setSubmittedFile({ url: d.assessor.report_file_url, name: d.assessor.report_file_name });
+          }
         }
       })
       .catch(() => setPageError('Failed to connect to the server. Please check your connection and try again.'))
@@ -130,24 +137,36 @@ const ExternalAssessorPortal = () => {
   const avg = avgScore(grades);
   const suggested = suggestOutcome(avg);
 
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.type !== 'application/pdf') { setFileError('Please select a PDF file.'); return; }
+    if (file.size > 15 * 1024 * 1024) { setFileError('File must be under 15MB.'); return; }
+    setFileError(null);
+    setReportFile(file);
+  };
+
   const handleSubmit = async () => {
     if (!allRated) { setSubmitError('Please rate all criteria before submitting.'); return; }
     if (!outcome) { setSubmitError('Please select a final assessment outcome.'); return; }
+    if (!reportFile) { setSubmitError('Please attach your detailed assessment report as a PDF before submitting.'); return; }
     setSubmitting(true);
     setSubmitError(null);
     try {
+      const formData = new FormData();
+      formData.append('outcome', outcome);
+      formData.append('report_date', reportDate || '');
+      formData.append('report_notes', notes || '');
+      formData.append('report_grades', JSON.stringify(grades));
+      formData.append('report_file', reportFile);
+
       const res = await fetch(`${API_BASE}/public/assessor/${assessorId}/submit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          outcome,
-          report_date: reportDate || null,
-          report_notes: notes || null,
-          report_grades: grades,
-        }),
+        body: formData,
       });
       const json = await res.json();
       if (!res.ok) { setSubmitError(json.error || 'Submission failed. Please try again.'); return; }
+      setSubmittedFile({ url: json.assessor.report_file_url, name: json.assessor.report_file_name });
       setSubmitted(true);
     } catch {
       setSubmitError('Network error. Please check your connection and try again.');
@@ -236,6 +255,22 @@ const ExternalAssessorPortal = () => {
             <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.5rem 2rem', marginTop: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', textAlign: 'left' }}>
               <div style={{ fontWeight: 700, fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.75rem' }}>Assessment Notes</div>
               <div style={{ fontSize: '0.875rem', color: '#475569', lineHeight: 1.7 }}>{notes}</div>
+            </div>
+          )}
+
+          {submittedFile && (
+            <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, padding: '1.25rem 2rem', marginTop: '1rem', boxShadow: '0 2px 8px rgba(0,0,0,0.04)', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
+                <LuFileText size={22} color="#3b82f6" style={{ flexShrink: 0 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Detailed Report Document</div>
+                  <div style={{ fontSize: '0.85rem', color: '#1e293b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{submittedFile.name}</div>
+                </div>
+              </div>
+              <a href={submittedFile.url} target="_blank" rel="noopener noreferrer"
+                style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', fontWeight: 700, color: '#3b82f6', textDecoration: 'none', border: '1px solid #bfdbfe', borderRadius: 8, padding: '0.5rem 0.875rem' }}>
+                <LuExternalLink size={13} /> View PDF
+              </a>
             </div>
           )}
 
@@ -479,6 +514,38 @@ const ExternalAssessorPortal = () => {
               style={{ width: '100%', padding: '0.75rem 0.875rem', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: '0.875rem', color: '#1e293b', outline: 'none', resize: 'vertical', boxSizing: 'border-box', lineHeight: 1.6 }} />
           </div>
 
+          {/* Detailed report document upload */}
+          <div style={{ marginBottom: '1.5rem' }}>
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: '#374151', marginBottom: '0.4rem' }}>
+              Detailed Assessment Report (PDF) <span style={{ color: '#ef4444' }}>*</span>
+            </label>
+            <div style={{ fontSize: '0.775rem', color: '#94a3b8', marginBottom: '0.6rem' }}>
+              Upload your full written assessment report as a PDF document, in addition to the grading and notes above.
+            </div>
+            <label style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              border: `2px dashed ${reportFile ? '#10b981' : '#cbd5e1'}`, borderRadius: 10,
+              padding: '1.25rem', cursor: 'pointer',
+              background: reportFile ? 'rgba(16,185,129,0.05)' : '#f9fafb',
+              transition: 'all 0.15s',
+            }}>
+              <input type="file" accept="application/pdf" onChange={handleFileChange} style={{ display: 'none' }} />
+              {reportFile ? (
+                <>
+                  <LuFileText size={18} color="#10b981" />
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#065f46' }}>{reportFile.name}</span>
+                  <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>({(reportFile.size / 1024 / 1024).toFixed(2)} MB) — click to replace</span>
+                </>
+              ) : (
+                <>
+                  <LuUpload size={18} color="#6b7280" />
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#6b7280' }}>Click to select a PDF file (max 15MB)</span>
+                </>
+              )}
+            </label>
+            {fileError && <p style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: '#ef4444' }}>{fileError}</p>}
+          </div>
+
           {submitError && (
             <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', borderRadius: 8, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', color: '#b91c1c', fontSize: '0.85rem' }}>
               {submitError}
@@ -491,13 +558,19 @@ const ExternalAssessorPortal = () => {
             </div>
           )}
 
+          {allRated && outcome && !reportFile && (
+            <div style={{ marginBottom: '1rem', padding: '0.75rem 1rem', borderRadius: 8, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', color: '#92400e', fontSize: '0.82rem' }}>
+              Please attach your detailed assessment report as a PDF above before submitting.
+            </div>
+          )}
+
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button onClick={handleSubmit} disabled={submitting || !allRated || !outcome}
+            <button onClick={handleSubmit} disabled={submitting || !allRated || !outcome || !reportFile}
               style={{
                 padding: '0.75rem 2rem', borderRadius: 9, border: 'none',
-                background: (submitting || !allRated || !outcome) ? '#cbd5e1' : '#3b82f6',
+                background: (submitting || !allRated || !outcome || !reportFile) ? '#cbd5e1' : '#3b82f6',
                 color: '#fff', fontWeight: 700, fontSize: '0.9rem',
-                cursor: (submitting || !allRated || !outcome) ? 'not-allowed' : 'pointer',
+                cursor: (submitting || !allRated || !outcome || !reportFile) ? 'not-allowed' : 'pointer',
                 display: 'flex', alignItems: 'center', gap: '0.5rem',
                 transition: 'background 0.15s',
               }}>

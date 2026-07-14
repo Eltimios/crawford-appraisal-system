@@ -698,9 +698,28 @@ const bulkOnboard = async (req, res) => {
           return;
         }
 
+        // The template instructs DD/MM/YYYY (the Nigerian convention), but a plain
+        // JS `new Date(string)` parses ambiguous slash-separated dates as US
+        // MM/DD/YYYY — silently swapping day/month, or returning an invalid date
+        // (and therefore null) whenever the day-of-month is > 12. Parse that
+        // format explicitly instead of trusting the native parser with it.
         const toDate = (v) => {
           if (!v) return null;
-          const d = new Date(v);
+          const str = String(v).trim();
+          if (!str) return null;
+
+          const dmy = str.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+          if (dmy) {
+            const day = parseInt(dmy[1], 10);
+            const month = parseInt(dmy[2], 10);
+            const year = parseInt(dmy[3], 10);
+            if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+            const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            return isNaN(new Date(iso).getTime()) ? null : iso;
+          }
+
+          // Fallback for unambiguous formats (ISO strings, stringified Date objects)
+          const d = new Date(str);
           return isNaN(d.getTime()) ? null : d.toISOString().split('T')[0];
         };
 

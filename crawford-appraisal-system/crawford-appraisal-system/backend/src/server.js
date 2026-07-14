@@ -35,7 +35,23 @@ const publicRoutes = require('./routes/publicRoutes');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(helmet());
+// Two of helmet's defaults block the frontend (a different origin — different
+// port in dev, likely a different subdomain in production) from embedding files
+// served here (e.g. publication PDFs in an <iframe>): crossOriginResourcePolicy
+// ('same-origin') and CSP's frame-ancestors ('self'). This app is cross-origin
+// by design, and file access is already gated appropriately (public uploads are
+// meant to be public; private ones go through the token-gated minutes download
+// route) — CORS already covers the API, so we just need to let the known
+// frontend origin frame this server's responses.
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      'frame-ancestors': ["'self'", process.env.FRONTEND_URL || 'http://localhost:3000'],
+    },
+  },
+}));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 app.use(cors({
@@ -50,6 +66,7 @@ app.use(express.urlencoded({ extended: true }));
 // by the external assessor portal. Meeting minutes are NOT served here; they go
 // through an authenticated streaming route instead (see minutesRoutes.js).
 app.use('/uploads/publications', express.static(path.join(UPLOADS_ROOT, 'publications')));
+app.use('/uploads/assessor-reports', express.static(path.join(UPLOADS_ROOT, 'assessor-reports')));
 
 // Disable browser caching for all API responses
 app.use('/api/', (_req, res, next) => {

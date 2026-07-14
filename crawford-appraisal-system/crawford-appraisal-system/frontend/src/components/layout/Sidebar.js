@@ -72,7 +72,6 @@ const navConfig = {
   vc: [
     { label: 'Dashboard',           icon: LuLayoutDashboard, to: '/vc' },
     { label: 'Assess Deans',        icon: LuUserCheck,       to: '/vc/assess-deans' },
-    { label: 'External Assessors',  icon: LuShield,          to: '/vc/assessors' },
     { label: 'University Overview', icon: LuBuilding2,       to: '/vc/overview' },
     { label: 'Notifications',       icon: LuBell,            to: '/vc/notifications' },
     { label: 'Profile',             icon: LuUser,            to: '/vc/profile' },

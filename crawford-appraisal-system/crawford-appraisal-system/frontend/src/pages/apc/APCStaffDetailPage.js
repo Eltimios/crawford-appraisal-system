@@ -3,28 +3,25 @@ import { useParams, useLocation, useNavigate } from 'react-router-dom';
 import {
   LuArrowLeft, LuUser, LuBuilding2, LuBadge, LuLoader,
   LuTrendingUp, LuCoins, LuCheckCircle2, LuClock, LuX,
-  LuGlobe, LuShield, LuClipboardCheck,
+  LuShield,
 } from 'react-icons/lu';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 
 const ASSESSOR_RANKS     = ['Lecturer I', 'Senior Lecturer', 'Associate Professor'];
-const PROFESSORIAL_RANKS = ['Senior Lecturer', 'Associate Professor'];
 
 const OutcomeDot = ({ outcome }) => {
   const colors = { positive: '#10b981', negative: '#ef4444', pending: '#6b7280' };
   return <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: colors[outcome] || colors.pending, flexShrink: 0 }} />;
 };
 
-const AssessorStatusSection = ({ appraisalId, currentRank, role }) => {
+// Only the Initial Assessment stage is surfaced here — the professorial
+// promotion track's second stage (PFQ, VC-selected final assessors) is
+// confidential and handled entirely on paper, outside the system.
+const AssessorStatusSection = ({ appraisalId }) => {
   const [data, setData]         = useState(null);
   const [loading, setLoading]   = useState(true);
-  const [submitting, setSubmit] = useState(false);
-  const [intNotes, setIntNotes] = useState('');
-
-  const isAPC = ['a&pc', 'apc_academic'].includes(role);
-  const isProfessorial = PROFESSORIAL_RANKS.includes(currentRank);
 
   const load = useCallback(async () => {
     try {
@@ -43,42 +40,8 @@ const AssessorStatusSection = ({ appraisalId, currentRank, role }) => {
   if (!data) return null;
 
   const assessors = data.assessors || [];
-  const meta      = data.appraisal  || {};
   const initial   = assessors.filter(a => a.stage === 'initial');
-  const final     = assessors.filter(a => a.stage === 'final');
   const posInit   = initial.filter(a => a.outcome === 'positive').length;
-  const posFinal  = final.filter(a => a.selected_by_vc && a.outcome === 'positive').length;
-  const totalFinalSelected = final.filter(a => a.selected_by_vc).length;
-
-  const canEstablishPFQ  = isAPC && isProfessorial && !meta.pfq_established && posInit >= 2;
-  const canCompleteInterview = isAPC && meta.pfq_established && !meta.interview_completed && posFinal >= 2;
-
-  const doEstablishPFQ = async () => {
-    setSubmit('pfq');
-    try {
-      await api.patch(`/assessors/${appraisalId}/pfq`);
-      toast.success('PFQ established. Dean has been notified.');
-      load();
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to establish PFQ.');
-    } finally {
-      setSubmit(false);
-    }
-  };
-
-  const doCompleteInterview = async () => {
-    setSubmit('interview');
-    try {
-      await api.patch(`/assessors/${appraisalId}/interview`, { notes: intNotes || null });
-      toast.success('Interview marked as completed.');
-      setIntNotes('');
-      load();
-    } catch (err) {
-      toast.error(err.response?.data?.error || 'Failed to mark interview completed.');
-    } finally {
-      setSubmit(false);
-    }
-  };
 
   const AssessorRow = ({ a }) => (
     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0', borderBottom: '1px solid var(--border)', fontSize: '0.8rem' }}>
@@ -86,11 +49,6 @@ const AssessorStatusSection = ({ appraisalId, currentRank, role }) => {
       <span style={{ flex: 1, color: 'var(--text-primary)', fontWeight: 500 }}>{a.name}</span>
       <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{a.institution}</span>
       <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.45rem', borderRadius: 10, background: a.assessor_type === 'external' ? 'rgba(245,158,11,0.12)' : 'rgba(139,92,246,0.12)', color: a.assessor_type === 'external' ? '#d97706' : '#7c3aed' }}>{a.assessor_type}</span>
-      {a.scope && (
-        <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '0.1rem 0.45rem', borderRadius: 10, background: a.scope === 'international' ? 'rgba(99,102,241,0.12)' : 'rgba(14,165,233,0.12)', color: a.scope === 'international' ? '#6366f1' : '#0ea5e9', display: 'flex', alignItems: 'center', gap: 3 }}>
-          {a.scope === 'international' ? <LuGlobe size={10} /> : <LuBuilding2 size={10} />} {a.scope}
-        </span>
-      )}
     </div>
   );
 
@@ -100,8 +58,7 @@ const AssessorStatusSection = ({ appraisalId, currentRank, role }) => {
         <LuShield size={16} style={{ color: 'var(--role-accent)' }} /> External Assessors
       </h3>
 
-      {/* ── Initial Stage ── */}
-      <div style={{ marginBottom: '1.25rem' }}>
+      <div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
           <div style={{ fontSize: '0.825rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Initial Assessment (1 external + 2 internal)</div>
           <div style={{ fontSize: '0.8rem', fontWeight: 700, color: posInit >= 2 ? '#10b981' : 'var(--text-muted)' }}>{posInit}/3 positive {posInit >= 2 ? '✓' : ''}</div>
@@ -109,75 +66,7 @@ const AssessorStatusSection = ({ appraisalId, currentRank, role }) => {
         {initial.length === 0
           ? <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>No assessors assigned by Dean yet.</div>
           : initial.map(a => <AssessorRow key={a.id} a={a} />)}
-
-        {canEstablishPFQ && (
-          <div style={{ marginTop: '0.875rem', padding: '0.875rem 1rem', borderRadius: 10, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
-            <div style={{ fontSize: '0.825rem', fontWeight: 600, color: '#065f46', marginBottom: '0.5rem' }}>
-              2+ positive reports received. Ready to establish Prima Facie Qualification.
-            </div>
-            <button onClick={doEstablishPFQ} disabled={submitting === 'pfq'} className="btn btn-primary" style={{ fontSize: '0.825rem', padding: '0.4rem 1rem' }}>
-              {submitting === 'pfq' ? 'Establishing…' : 'Establish PFQ'}
-            </button>
-          </div>
-        )}
-        {meta.pfq_established && (
-          <div style={{ marginTop: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0.3rem 0.875rem', borderRadius: 20, background: 'rgba(16,185,129,0.12)', color: '#10b981', fontSize: '0.775rem', fontWeight: 700 }}>
-            <LuCheckCircle2 size={13} /> PFQ Established
-          </div>
-        )}
       </div>
-
-      {/* ── Final Stage (professorial only) ── */}
-      {isProfessorial && (
-        <div>
-          <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-              <div style={{ fontSize: '0.825rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Final External Assessment (VC-selected 3)</div>
-              {totalFinalSelected > 0 && (
-                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: posFinal >= 2 ? '#10b981' : 'var(--text-muted)' }}>{posFinal}/{totalFinalSelected} positive {posFinal >= 2 ? '✓' : ''}</div>
-              )}
-            </div>
-
-            {!meta.pfq_established && (
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Awaiting PFQ establishment before final stage begins.</div>
-            )}
-            {meta.pfq_established && final.length === 0 && (
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>Dean has not yet submitted 6 external assessor names to VC.</div>
-            )}
-            {final.length > 0 && (
-              <>
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.4rem' }}>
-                  {final.length}/6 names submitted · {totalFinalSelected}/3 selected by VC
-                </div>
-                {final.filter(a => a.selected_by_vc).map(a => <AssessorRow key={a.id} a={a} />)}
-                {final.filter(a => !a.selected_by_vc).length > 0 && (
-                  <div style={{ marginTop: '0.5rem' }}>
-                    <div style={{ fontSize: '0.725rem', color: 'var(--text-muted)', marginBottom: '0.3rem', fontStyle: 'italic' }}>Not selected by VC:</div>
-                    {final.filter(a => !a.selected_by_vc).map(a => <AssessorRow key={a.id} a={a} />)}
-                  </div>
-                )}
-              </>
-            )}
-
-            {canCompleteInterview && (
-              <div style={{ marginTop: '0.875rem', padding: '0.875rem 1rem', borderRadius: 10, background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)' }}>
-                <div style={{ fontSize: '0.825rem', fontWeight: 600, color: '#3730a3', marginBottom: '0.5rem' }}>
-                  2+ positive final reports received. Ready to mark promotion interview.
-                </div>
-                <textarea rows={2} className="form-input" placeholder="Interview notes (optional)…" value={intNotes} onChange={e => setIntNotes(e.target.value)} style={{ resize: 'vertical', marginBottom: '0.5rem', fontSize: '0.8rem' }} />
-                <button onClick={doCompleteInterview} disabled={submitting === 'interview'} className="btn btn-primary" style={{ fontSize: '0.825rem', padding: '0.4rem 1rem' }}>
-                  <LuClipboardCheck size={14} /> {submitting === 'interview' ? 'Saving…' : 'Mark Interview Completed'}
-                </button>
-              </div>
-            )}
-            {meta.interview_completed && (
-              <div style={{ marginTop: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0.3rem 0.875rem', borderRadius: 20, background: 'rgba(99,102,241,0.12)', color: '#6366f1', fontSize: '0.775rem', fontWeight: 700 }}>
-                <LuClipboardCheck size={13} /> Interview Completed
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 };
@@ -226,7 +115,7 @@ const APCStaffDetailPage = () => {
     setSubmitting(true);
     try {
       await api.post(`/promotions/appraisals/${appraisalId}/recommend`, { decision: selected, notes });
-      toast.success('Recommendation recorded. Pending Council approval.');
+      toast.success('Recommendation recorded. This is the final decision for this appraisal cycle.');
       setShowModal(false);
       // Refresh
       api.get('/promotions/eligible')
